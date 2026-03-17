@@ -119,10 +119,10 @@
 
 > PRD-ссылки: 3.1 (flow), 3.2 (опции --device), 3.4 (форматы), 4.2 (ffmpeg)
 
-- [ ] `check_ffmpeg()`:
+- [x] `check_ffmpeg()`:
   - `subprocess.run(["ffmpeg", "-version"], capture_output=True)`
   - При `FileNotFoundError` → `SystemExit` с сообщением и инструкцией: `apt install ffmpeg` / `winget install ffmpeg` / `brew install ffmpeg`
-- [ ] `detect_device(requested: str = "auto") -> str`:
+- [x] `detect_device(requested: str = "auto") -> str`:
   - Если `requested != "auto"` → вернуть `requested`
   - Иначе: проверить CUDA через `shutil.which("nvidia-smi")` как быстрый хинт
   - Если nvidia-smi найден → `"cuda"`
@@ -130,19 +130,19 @@
   - **Не импортировать** ctranslate2 или torch здесь — faster-whisper ещё не в зависимостях
   - Точная проверка CUDA будет при загрузке модели (шаг 3), здесь — best effort
   - `--compute-type` остаётся независимым параметром CLI, не связан с detect_device
-- [ ] `get_gpu_name() -> str | None`:
+- [x] `get_gpu_name() -> str | None`:
   - `subprocess.run(["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"], capture_output=True)`
   - Вернуть первую строку stdout (strip) или `None` если nvidia-smi недоступен / ошибка
   - Используется для формирования `device_info` в шапке markdown: `"CUDA (NVIDIA GeForce RTX 3060)"` или `"CPU"`
-- [ ] `validate_input_file(path: Path) -> Path`:
+- [x] `validate_input_file(path: Path) -> Path`:
   - Проверить: существует, является файлом (не директорией), размер > 0
   - Расширение из допустимых (PRD 3.4) → если нет, **warning** (не ошибка), продолжить
   - Вернуть `path.resolve()`
-- [ ] `build_output_path(input_path: Path, output: Path | None = None) -> Path`:
+- [x] `build_output_path(input_path: Path, output: Path | None = None) -> Path`:
   - Если `output` задан → вернуть его
   - Иначе → `input_path.with_stem(input_path.stem + "-transcript").with_suffix(".md")`
 
-- [ ] Тесты в `tests/test_utils.py`:
+- [x] Тесты в `tests/test_utils.py`:
   - `test_validate_input_file_not_found` — несуществующий файл → ошибка
   - `test_validate_input_file_empty` — пустой файл → ошибка
   - `test_validate_input_file_unknown_ext` — `.txt` → warning, но не ошибка
