@@ -22,7 +22,9 @@
   │       └── utils.py
   └── tests/
       ├── __init__.py
-      └── test_formatter.py   # заглушка
+      ├── test_formatter.py   # заглушка
+      ├── test_transcriber.py # заглушка
+      └── test_utils.py       # заглушка
   ```
 - [ ] `pyproject.toml`:
   - `name = "local-transcriber"`, `python = ">=3.10"`
@@ -37,13 +39,15 @@
   from pathlib import Path
 
   def check_ffmpeg() -> None: ...
-  def detect_device(requested: str = "auto") -> tuple[str, str]: ...
+  def detect_device(requested: str = "auto") -> str: ...  # возвращает только device
+  def get_gpu_name() -> str | None: ...  # nvidia-smi → "NVIDIA GeForce RTX 3060" или None
   def validate_input_file(path: Path) -> Path: ...
   def build_output_path(input_path: Path, output: Path | None = None) -> Path: ...
   ```
 
   **transcriber.py**:
   ```python
+  from collections.abc import Callable
   from dataclasses import dataclass
   from pathlib import Path
 
@@ -58,7 +62,8 @@
       segments: list[Segment]
       language: str
       language_probability: float
-      duration: float  # секунды
+      duration: float       # секунды
+      device_used: str      # фактическое устройство ("cpu" / "cuda") — может отличаться от запрошенного после fallback
 
   def transcribe(
       file_path: Path,
@@ -66,11 +71,13 @@
       device: str = "auto",
       compute_type: str = "int8",
       language: str | None = None,
+      on_segment: Callable[[Segment], None] | None = None,  # callback для --verbose (вызывается на каждый сегмент)
   ) -> TranscribeResult: ...
   ```
 
   **formatter.py**:
   ```python
+  from datetime import datetime
   from pathlib import Path
   from .transcriber import TranscribeResult
 
@@ -81,7 +88,8 @@
       source_filename: str,
       model_name: str,
       device_info: str,
-      language_mode: str,
+      language_mode: str,       # "detected" | "forced"
+      transcription_date: datetime | None = None,  # None → datetime.now()
   ) -> str: ...
 
   def write_transcript(content: str, output_path: Path) -> None: ...
@@ -89,6 +97,7 @@
 
   **cli.py**:
   ```python
+  from pathlib import Path
   import typer
   app = typer.Typer()
 
@@ -102,9 +111,7 @@
 
 - [ ] `uv sync` → `uv run transcribe --help` работает
 
-**Критерий готовности**: `uv run transcribe --help` показывает аргументы. `uv run pytest` проходит (тесты пустые, но pytest находит test_formatter.py). Все модули импортируются без ошибок.
-
-**Коммит**: `git add -A && git commit -m "step 1: scaffold with stubs and interfaces"`
+**Критерий готовности**: `uv run transcribe --help` показывает аргументы. `uv run pytest` проходит (тесты пустые, но pytest находит test_formatter.py, test_transcriber.py и test_utils.py). Все модули импортируются без ошибок.
 
 ---
 
@@ -115,13 +122,18 @@
 - [ ] `check_ffmpeg()`:
   - `subprocess.run(["ffmpeg", "-version"], capture_output=True)`
   - При `FileNotFoundError` → `SystemExit` с сообщением и инструкцией: `apt install ffmpeg` / `winget install ffmpeg` / `brew install ffmpeg`
-- [ ] `detect_device(requested: str = "auto") -> tuple[str, str]`:
-  - Если `requested != "auto"` → вернуть `(requested, "int8")`
+- [ ] `detect_device(requested: str = "auto") -> str`:
+  - Если `requested != "auto"` → вернуть `requested`
   - Иначе: проверить CUDA через `shutil.which("nvidia-smi")` как быстрый хинт
-  - Если nvidia-smi найден → `("cuda", "int8")`
-  - Иначе → `("cpu", "int8")`
+  - Если nvidia-smi найден → `"cuda"`
+  - Иначе → `"cpu"`
   - **Не импортировать** ctranslate2 или torch здесь — faster-whisper ещё не в зависимостях
   - Точная проверка CUDA будет при загрузке модели (шаг 3), здесь — best effort
+  - `--compute-type` остаётся независимым параметром CLI, не связан с detect_device
+- [ ] `get_gpu_name() -> str | None`:
+  - `subprocess.run(["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"], capture_output=True)`
+  - Вернуть первую строку stdout (strip) или `None` если nvidia-smi недоступен / ошибка
+  - Используется для формирования `device_info` в шапке markdown: `"CUDA (NVIDIA GeForce RTX 3060)"` или `"CPU"`
 - [ ] `validate_input_file(path: Path) -> Path`:
   - Проверить: существует, является файлом (не директорией), размер > 0
   - Расширение из допустимых (PRD 3.4) → если нет, **warning** (не ошибка), продолжить
@@ -130,9 +142,18 @@
   - Если `output` задан → вернуть его
   - Иначе → `input_path.with_stem(input_path.stem + "-transcript").with_suffix(".md")`
 
-**Критерий готовности**: `uv run python -c "from local_transcriber.utils import check_ffmpeg, detect_device; check_ffmpeg(); print(detect_device())"` — работает на машине агента (CPU fallback).
+- [ ] Тесты в `tests/test_utils.py`:
+  - `test_validate_input_file_not_found` — несуществующий файл → ошибка
+  - `test_validate_input_file_empty` — пустой файл → ошибка
+  - `test_validate_input_file_unknown_ext` — `.txt` → warning, но не ошибка
+  - `test_validate_input_file_ok` — валидный файл → возвращает resolved path
+  - `test_build_output_path_default` — без `--output` → `*-transcript.md`
+  - `test_build_output_path_custom` — с `--output` → возвращает его
+  - `test_detect_device_explicit` — `requested="cpu"` → `"cpu"`
+  - `test_get_gpu_name_no_nvidia_smi` — nvidia-smi недоступен → `None`
+  - `test_get_gpu_name_success` — mock nvidia-smi → возвращает строку с именем GPU
 
-**Коммит**: `git add -A && git commit -m "step 2: utils — ffmpeg check, device detection, path helpers"`
+**Критерий готовности**: `uv run pytest tests/test_utils.py -v` — все тесты зелёные. `uv run python -c "from local_transcriber.utils import check_ffmpeg, detect_device; check_ffmpeg(); print(detect_device())"` — работает (CPU fallback).
 
 ---
 
@@ -144,16 +165,21 @@
 - [ ] Реализовать `transcribe()`:
   - Создать `WhisperModel(model_name, device=device, compute_type=compute_type)`
   - При ошибке загрузки на CUDA (OOM, CUDA error) → **поймать**, вывести warning, **повторить с device="cpu"**
+  - Запомнить фактический device → записать в `TranscribeResult.device_used`
   - `model.transcribe(str(file_path), language=language if language != "auto" else None)`
-  - faster-whisper возвращает `(segment_generator, info)` — итерировать generator, собрать в `list[Segment]`
+  - faster-whisper возвращает `(segment_generator, info)` — итерировать generator, для каждого сегмента вызвать `on_segment(segment)` если callback передан, затем собрать в `list[Segment]`
   - Заполнить `TranscribeResult` из info (language, duration и т.д.)
 - [ ] Обработка ошибок:
   - `RuntimeError` с "CUDA" / "out of memory" → fallback на CPU + warning
   - Ошибка ffmpeg (невалидный медиафайл) → пробросить с понятным текстом
+- [ ] Тесты в `tests/test_transcriber.py` (mock WhisperModel, без реальной модели):
+  - `test_transcribe_collects_segments` — mock возвращает 3 сегмента → результат содержит 3 Segment
+  - `test_transcribe_calls_on_segment` — callback вызывается для каждого сегмента
+  - `test_transcribe_cuda_fallback` — mock бросает RuntimeError("CUDA") при device="cuda" → fallback, `device_used == "cpu"`
+  - `test_transcribe_device_used` — без fallback → `device_used` совпадает с запрошенным
 
-**Критерий готовности**: на машине агента — `transcribe()` работает с `device="cpu"`, `model="tiny"` (быстро скачивается). Полноценная проверка с large-v3 и GPU — на локальной машине разработчика.
+**Критерий готовности**: `uv run pytest tests/test_transcriber.py -v` — зелёное. Дополнительно на машине агента — `transcribe()` работает с `device="cpu"`, `model="tiny"`. Полноценная проверка с large-v3 и GPU — на локальной машине.
 
-**Коммит**: `git add -A && git commit -m "step 3: transcriber — faster-whisper wrapper with CUDA fallback"`
 
 ---
 
@@ -167,9 +193,12 @@
   - Сотые — всегда 2 знака после точки
 - [ ] `format_transcript(...)`:
   - Шапка по шаблону PRD 3.3 (заголовок, метаданные, разделитель)
+  - `language_mode`: `"detected"` если CLI получил `--language auto`, `"forced"` если язык задан явно
+  - В шапке: `**Язык**: {language} ({language_mode})` → например `ru (detected)` или `en (forced)`
+  - `transcription_date`: если `None` → `datetime.now()`. Формат в шапке: `YYYY-MM-DD HH:MM:SS`
   - Автоматически `use_hours=True` если `result.duration > 3600`
   - Сегменты: `[MM:SS.ss - MM:SS.ss] текст\n\n`
-  - Если `len(result.segments) == 0` → после разделителя: `\n*Речь не обнаружена.*\n`
+  - Если `len(result.segments) == 0` → после разделителя: `\n*Речь не обнаружена.*\n` (файл создаётся с полной шапкой метаданных; warning в stderr выводит CLI в шаге 5)
 - [ ] `write_transcript(content: str, output_path: Path)`:
   - `open(output_path, "w", encoding="utf-8")`
 - [ ] Тесты в `tests/test_formatter.py`:
@@ -180,8 +209,6 @@
   - `test_format_transcript_long` — duration > 3600 → таймкоды с часами
 
 **Критерий готовности**: `uv run pytest tests/test_formatter.py -v` — все тесты зелёные.
-
-**Коммит**: `git add -A && git commit -m "step 4: formatter with markdown output and tests"`
 
 ---
 
@@ -200,19 +227,19 @@
 - [ ] Happy path flow:
   1. `check_ffmpeg()`
   2. `validate_input_file(file)`
-  3. `detect_device()` если `--device auto`, иначе использовать переданные device + compute_type
+  3. `detect_device(device)` → получить device; `--compute-type` используется как есть (независим от device)
   4. rich Console → stderr: информация о запуске (модель, устройство, файл)
   5. rich Spinner/Status во время транскрипции
-  6. `transcribe(...)`
+  6. `transcribe(...)` — передать `on_segment=<callback>` если `--verbose`
   7. Если 0 сегментов → `console.print("⚠ Речь не обнаружена в файле ...", style="yellow")`
-  8. `format_transcript(...)` → `write_transcript(...)`
-  9. `console.print("✓ Транскрипт сохранён: <путь>", style="green")`
-  10. Статистика: кол-во сегментов, время работы (замерить через `time.monotonic()`)
+  8. `format_transcript(...)` — `device_info`: если `result.device_used == "cuda"` → `"CUDA ({get_gpu_name() or 'Unknown GPU'})"`, иначе `"CPU"`
+  9. `write_transcript(...)`
+  10. `console.print("✓ Транскрипт сохранён: <путь>", style="green")`
+  11. Статистика: кол-во сегментов, время работы (замерить через `time.monotonic()`)
 - [ ] Exit codes: 0 — успех (включая пустую речь), 1 — ошибка
 
 **Критерий готовности**: `uv run transcribe test.mp3` — создаёт корректный .md файл (проверить на локальной машине с реальным файлом).
 
-**Коммит**: `git add -A && git commit -m "step 5: CLI happy path — end-to-end transcription"`
 
 ---
 
@@ -222,12 +249,11 @@
 
 - [ ] Graceful Ctrl+C: перехват `KeyboardInterrupt` в cli.py → `console.print("Прервано пользователем", style="yellow")` + `raise SystemExit(130)`
 - [ ] Красивые ошибки: обернуть main в try/except, для пользовательских ошибок (файл не найден, ffmpeg, OOM) — вывод через rich без traceback; для неожиданных — traceback только с `--verbose`
-- [ ] `--verbose` режим: при транскрипции выводить каждый сегмент в stderr по мере получения из generator (до сборки в список)
+- [ ] `--verbose` режим: реализуется через `on_segment` callback в `transcribe()` (уже заложен в шаге 3) — печатать каждый сегмент в stderr по мере поступления
 - [ ] Проверка: неподдерживаемое расширение → warning, но попытка продолжить
 
 **Критерий готовности**: ручной прогон edge cases — несуществующий файл, .txt файл, Ctrl+C во время работы.
 
-**Коммит**: `git add -A && git commit -m "step 6: error handling, verbose mode, graceful shutdown"`
 
 ---
 
@@ -251,7 +277,6 @@
 
 **Критерий готовности**: коллега может по README установить и запустить на Windows/WSL2 без вопросов.
 
-**Коммит**: `git add -A && git commit -m "step 7: README with install, usage, GPU guide"`
 
 ---
 
@@ -264,5 +289,3 @@
 После реализации — отметь все чекбоксы шага как [x] в plan.md.
 Не трогай код и чекбоксы из других шагов.
 ```
-
-После каждого шага — `git add -A && git commit -m "<сообщение из шага>"`.
