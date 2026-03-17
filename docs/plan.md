@@ -216,7 +216,7 @@
 
 > PRD-ссылки: 3.1 (flow), 3.2 (CLI-интерфейс)
 
-- [ ] Typer command с аргументами и опциями по PRD 3.2:
+- [x] Typer command с аргументами и опциями по PRD 3.2:
   - `file: Path` — позиционный аргумент
   - `--model` / `-m` → default `"large-v3"`
   - `--language` / `-l` → default `"auto"`
@@ -224,7 +224,7 @@
   - `--device` / `-d` → default `"auto"`
   - `--compute-type` → default `"int8"`
   - `--verbose` / `-v` → flag, default False
-- [ ] Happy path flow:
+- [x] Happy path flow:
   1. `check_ffmpeg()`
   2. `validate_input_file(file)`
   3. `detect_device(device)` → получить device; `--compute-type` используется как есть (независим от device)
@@ -236,7 +236,7 @@
   9. `write_transcript(...)`
   10. `console.print("✓ Транскрипт сохранён: <путь>", style="green")`
   11. Статистика: кол-во сегментов, время работы (замерить через `time.monotonic()`)
-- [ ] Exit codes: 0 — успех (включая пустую речь), 1 — ошибка
+- [x] Exit codes: 0 — успех (включая пустую речь), 1 — ошибка
 
 **Критерий готовности**: `uv run transcribe test.mp3` — создаёт корректный .md файл (проверить на локальной машине с реальным файлом).
 

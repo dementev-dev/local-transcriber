@@ -5,8 +5,9 @@ from .transcriber import TranscribeResult
 
 
 def format_timestamp(seconds: float, use_hours: bool = False) -> str:
-    total_seconds = int(seconds)
-    centiseconds = int(round((seconds - total_seconds) * 100))
+    total_cs = round(seconds * 100)
+    centiseconds = total_cs % 100
+    total_seconds = total_cs // 100
 
     if use_hours:
         hours = total_seconds // 3600
@@ -59,7 +60,7 @@ def format_transcript(
             start = format_timestamp(seg.start, use_hours=use_hours)
             end = format_timestamp(seg.end, use_hours=use_hours)
             lines.append("")
-            lines.append(f"[{start} - {end}]{seg.text}")
+            lines.append(f"[{start} - {end}] {seg.text.strip()}")
 
     lines.append("")
     return "\n".join(lines)

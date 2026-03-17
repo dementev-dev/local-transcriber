@@ -14,6 +14,7 @@ def test_format_timestamp_minutes():
     assert format_timestamp(83.45) == "01:23.45"
     assert format_timestamp(9.1) == "00:09.10"
     assert format_timestamp(599.99) == "09:59.99"
+    assert format_timestamp(0.995) == "00:01.00"  # carry-over: не даёт .100
 
 
 def test_format_timestamp_hours():
@@ -49,8 +50,29 @@ def test_format_transcript_basic():
     assert "**Длительность**: 02:00" in content
     assert "**Устройство**: CUDA (NVIDIA GeForce RTX 3060)" in content
     assert "---" in content
+    # Проверяем пробел между ] и текстом независимо от ведущих пробелов в seg.text
     assert "[00:00.00 - 00:04.82] Добрый день, коллеги." in content
     assert "[00:04.82 - 00:09.15] Первый вопрос." in content
+
+
+def test_format_transcript_segment_no_leading_space():
+    """Сегменты без ведущего пробела должны форматироваться корректно."""
+    result = TranscribeResult(
+        segments=[Segment(start=0.0, end=2.0, text="Hello")],
+        language="en",
+        language_probability=0.99,
+        duration=5.0,
+        device_used="cpu",
+    )
+    content = format_transcript(
+        result,
+        source_filename="f.mp3",
+        model_name="tiny",
+        device_info="CPU",
+        language_mode="detected",
+        transcription_date=datetime(2026, 1, 1, 0, 0, 0),
+    )
+    assert "[00:00.00 - 00:02.00] Hello" in content
 
 
 def test_format_transcript_empty():
