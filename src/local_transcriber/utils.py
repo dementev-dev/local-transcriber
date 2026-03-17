@@ -39,8 +39,10 @@ def get_gpu_name() -> str | None:
             check=False,
         )
         if result.returncode == 0:
-            name = result.stdout.strip().splitlines()[0].strip()
-            return name if name else None
+            lines = result.stdout.strip().splitlines()
+            if lines:
+                name = lines[0].strip()
+                return name if name else None
     except FileNotFoundError:
         pass
     return None

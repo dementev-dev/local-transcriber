@@ -161,18 +161,18 @@
 
 > PRD-ссылки: 5.1 (faster-whisper), 4.1.1 (GPU совместимость), 6 (риски OOM)
 
-- [ ] `uv add faster-whisper` — добавить в зависимости
-- [ ] Реализовать `transcribe()`:
+- [x] `uv add faster-whisper` — добавить в зависимости
+- [x] Реализовать `transcribe()`:
   - Создать `WhisperModel(model_name, device=device, compute_type=compute_type)`
   - При ошибке загрузки на CUDA (OOM, CUDA error) → **поймать**, вывести warning, **повторить с device="cpu"**
   - Запомнить фактический device → записать в `TranscribeResult.device_used`
   - `model.transcribe(str(file_path), language=language if language != "auto" else None)`
   - faster-whisper возвращает `(segment_generator, info)` — итерировать generator, для каждого сегмента вызвать `on_segment(segment)` если callback передан, затем собрать в `list[Segment]`
   - Заполнить `TranscribeResult` из info (language, duration и т.д.)
-- [ ] Обработка ошибок:
+- [x] Обработка ошибок:
   - `RuntimeError` с "CUDA" / "out of memory" → fallback на CPU + warning
   - Ошибка ffmpeg (невалидный медиафайл) → пробросить с понятным текстом
-- [ ] Тесты в `tests/test_transcriber.py` (mock WhisperModel, без реальной модели):
+- [x] Тесты в `tests/test_transcriber.py` (mock WhisperModel, без реальной модели):
   - `test_transcribe_collects_segments` — mock возвращает 3 сегмента → результат содержит 3 Segment
   - `test_transcribe_calls_on_segment` — callback вызывается для каждого сегмента
   - `test_transcribe_cuda_fallback` — mock бросает RuntimeError("CUDA") при device="cuda" → fallback, `device_used == "cpu"`

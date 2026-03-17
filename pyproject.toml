@@ -6,6 +6,7 @@ requires-python = ">=3.10"
 dependencies = [
     "typer",
     "rich",
+    "faster-whisper>=1.2.1",
 ]
 
 [project.scripts]

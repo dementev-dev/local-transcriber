@@ -65,6 +65,16 @@ def test_get_gpu_name_no_nvidia_smi():
     assert result is None
 
 
+def test_get_gpu_name_empty_stdout():
+    """nvidia-smi returns 0 but stdout is empty — should return None, not crash."""
+    mock_result = subprocess.CompletedProcess(
+        args=[], returncode=0, stdout="", stderr=""
+    )
+    with patch("subprocess.run", return_value=mock_result):
+        result = get_gpu_name()
+    assert result is None
+
+
 def test_get_gpu_name_success():
     mock_result = subprocess.CompletedProcess(
         args=[], returncode=0, stdout="NVIDIA GeForce RTX 3060\n", stderr=""
