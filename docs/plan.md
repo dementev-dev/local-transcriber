@@ -187,11 +187,11 @@
 
 > PRD-ссылки: 3.3 (формат выходного файла)
 
-- [ ] `format_timestamp(seconds: float, use_hours: bool = False) -> str`:
+- [x] `format_timestamp(seconds: float, use_hours: bool = False) -> str`:
   - `False` → `"01:23.45"` (MM:SS.ss)
   - `True` → `"01:23:45.67"` (HH:MM:SS.ss)
   - Сотые — всегда 2 знака после точки
-- [ ] `format_transcript(...)`:
+- [x] `format_transcript(...)`:
   - Шапка по шаблону PRD 3.3 (заголовок, метаданные, разделитель)
   - `language_mode`: `"detected"` если CLI получил `--language auto`, `"forced"` если язык задан явно
   - В шапке: `**Язык**: {language} ({language_mode})` → например `ru (detected)` или `en (forced)`
@@ -199,9 +199,9 @@
   - Автоматически `use_hours=True` если `result.duration > 3600`
   - Сегменты: `[MM:SS.ss - MM:SS.ss] текст\n\n`
   - Если `len(result.segments) == 0` → после разделителя: `\n*Речь не обнаружена.*\n` (файл создаётся с полной шапкой метаданных; warning в stderr выводит CLI в шаге 5)
-- [ ] `write_transcript(content: str, output_path: Path)`:
+- [x] `write_transcript(content: str, output_path: Path)`:
   - `open(output_path, "w", encoding="utf-8")`
-- [ ] Тесты в `tests/test_formatter.py`:
+- [x] Тесты в `tests/test_formatter.py`:
   - `test_format_timestamp_minutes` — обычный таймкод
   - `test_format_timestamp_hours` — формат с часами
   - `test_format_transcript_basic` — проверить шапку + пару сегментов
