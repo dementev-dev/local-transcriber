@@ -8,7 +8,7 @@
 
 ## Шаг 1: Scaffold проекта (без ML-зависимостей)
 
-- [ ] Создать структуру:
+- [x] Создать структуру:
   ```
   local-transcriber/
   ├── pyproject.toml
@@ -26,13 +26,13 @@
       ├── test_transcriber.py # заглушка
       └── test_utils.py       # заглушка
   ```
-- [ ] `pyproject.toml`:
+- [x] `pyproject.toml`:
   - `name = "local-transcriber"`, `python = ">=3.10"`
   - `[project.scripts]`: `transcribe = "local_transcriber.cli:app"`
   - dependencies: `typer`, `rich` (НЕ faster-whisper — он добавляется в шаге 3)
   - dev-dependencies: `pytest`
-- [ ] `.gitignore`: `__pycache__/`, `.venv/`, `*.egg-info/`, `.mypy_cache/`, `dist/`, `*.pyc`
-- [ ] В каждом модуле — заглушки с сигнатурами и `raise NotImplementedError`:
+- [x] `.gitignore`: `__pycache__/`, `.venv/`, `*.egg-info/`, `.mypy_cache/`, `dist/`, `*.pyc`
+- [x] В каждом модуле — заглушки с сигнатурами и `raise NotImplementedError`:
 
   **utils.py**:
   ```python
@@ -109,7 +109,7 @@
       app()
   ```
 
-- [ ] `uv sync` → `uv run transcribe --help` работает
+- [x] `uv sync` → `uv run transcribe --help` работает
 
 **Критерий готовности**: `uv run transcribe --help` показывает аргументы. `uv run pytest` проходит (тесты пустые, но pytest находит test_formatter.py, test_transcriber.py и test_utils.py). Все модули импортируются без ошибок.
 

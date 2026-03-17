@@ -1,0 +1,27 @@
+[project]
+name = "local-transcriber"
+version = "0.1.0"
+description = "Local CLI tool for audio/video transcription using faster-whisper"
+requires-python = ">=3.10"
+dependencies = [
+    "typer",
+    "rich",
+]
+
+[project.scripts]
+transcribe = "local_transcriber.cli:app"
+
+[dependency-groups]
+dev = [
+    "pytest",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/local_transcriber"]
