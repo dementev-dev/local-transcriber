@@ -247,8 +247,9 @@ def test_transcribe_reports_status_transitions(mock_model_cls):
     )
 
     assert statuses == [
-        "Загружаю модель на cpu...",
+        "Инициализирую модель на cpu...",
         "Транскрибирую...",
+        "Транскрибирую... 00:04 / 01:00  [1 сегм.]",
     ]
 
 

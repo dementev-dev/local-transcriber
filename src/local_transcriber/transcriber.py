@@ -66,7 +66,7 @@ def transcribe(
     lang_arg = language if language and language != "auto" else None
 
     try:
-        _notify_status(on_status, f"Загружаю модель на {device}...")
+        _notify_status(on_status, f"Инициализирую модель на {device}...")
         model = _create_model(model_name, device, compute_type)
     except (RuntimeError, ValueError) as exc:
         if device != "cpu" and _is_cuda_error(exc):
@@ -78,14 +78,14 @@ def transcribe(
                 stacklevel=2,
             )
             actual_device = "cpu"
-            _notify_status(on_status, "Загружаю модель на cpu...")
+            _notify_status(on_status, "Инициализирую модель на cpu...")
             model = _create_model(model_name, "cpu", compute_type)
         else:
             raise
 
     try:
         _notify_status(on_status, "Транскрибирую...")
-        segments, info = _run_transcription(model, file_path, lang_arg, on_segment)
+        segments, info = _run_transcription(model, file_path, lang_arg, on_segment, on_status)
     except (RuntimeError, ValueError) as exc:
         if actual_device != "cpu" and _is_cuda_error(exc):
             if strict_device:
@@ -96,10 +96,10 @@ def transcribe(
                 stacklevel=2,
             )
             actual_device = "cpu"
-            _notify_status(on_status, "Загружаю модель на cpu...")
+            _notify_status(on_status, "Инициализирую модель на cpu...")
             model = _create_model(model_name, "cpu", compute_type)
             _notify_status(on_status, "Транскрибирую...")
-            segments, info = _run_transcription(model, file_path, lang_arg, on_segment)
+            segments, info = _run_transcription(model, file_path, lang_arg, on_segment, on_status)
         else:
             raise
 
@@ -139,15 +139,21 @@ def ensure_model_available(
     return str(downloaded_path)
 
 
-def _run_transcription(model, file_path, lang_arg, on_segment):
+def _run_transcription(model, file_path, lang_arg, on_segment, on_status=None):
     """Run model.transcribe and iterate segments. Returns (segments, info)."""
     segment_generator, info = model.transcribe(str(file_path), language=lang_arg)
+    total_duration = info.duration
     segments: list[Segment] = []
     for raw_seg in segment_generator:
         seg = Segment(start=raw_seg.start, end=raw_seg.end, text=raw_seg.text)
         if on_segment is not None:
             on_segment(seg)
         segments.append(seg)
+        _notify_status(
+            on_status,
+            f"Транскрибирую... {_fmt_time(seg.end)} / {_fmt_time(total_duration)}"
+            f"  [{len(segments)} сегм.]",
+        )
     return segments, info
 
 
@@ -172,6 +178,12 @@ def _is_cuda_error(exc: BaseException) -> bool:
 def _is_missing_socksio_error(exc: BaseException) -> bool:
     msg = str(exc).lower()
     return "socks proxy" in msg and "socksio" in msg
+
+
+def _fmt_time(seconds: float) -> str:
+    m, s = divmod(int(seconds), 60)
+    h, m = divmod(m, 60)
+    return f"{h}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
 
 
 def _notify_status(on_status: Callable[[str], None] | None, message: str) -> None:
