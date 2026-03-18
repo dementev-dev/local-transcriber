@@ -243,6 +243,20 @@
 
 ---
 
+## Шаг 5.1: GPU runtime — прозрачная работа CUDA на Linux/WSL2
+
+> Детали решения и обоснование: [ADR-001](adr/001-cuda-bootstrap.md)
+
+- [x] `nvidia-cublas-cu12>=12.4` в dependencies (Linux x86_64)
+- [x] `_cuda_bootstrap.py` — preload libcublas через `ctypes.CDLL(RTLD_GLOBAL)` до импорта ctranslate2
+- [x] `strict_device` в transcriber — `--device cuda/cpu` без silent fallback
+- [x] CLI: диагностика requested vs resolved device, Windows CUDA-подсказка
+- [x] Тесты: bootstrap (unit + интеграционный), strict_device, Windows-диагностика
+
+**Критерий готовности**: `uv run pytest -v` — 52 passed, 1 skipped. На GPU-машине без системного CUDA toolkit: `uv run transcribe test.mp3 --device cuda` работает.
+
+---
+
 ## Шаг 6: Error handling и UX polish
 
 > PRD-ссылки: 6 (риски)

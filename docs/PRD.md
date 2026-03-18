@@ -120,7 +120,7 @@ transcribe <путь_к_файлу> [опции]
 
 - Python ≥ 3.10
 - ffmpeg в PATH (используется faster-whisper внутри для декодирования любых медиаформатов)
-- Для GPU: CUDA toolkit (cuBLAS, cuDNN) — ставится автоматически через CTranslate2
+- Для GPU: Linux/WSL2 — cuBLAS из nvidia-cublas-cu12 (ставится автоматически через `uv sync`); Windows — системный CUDA toolkit (см. ADR-001)
 - Дисковое пространство для моделей: ~3 GB (large-v3)
 - Выходные файлы: UTF-8 (явная кодировка при записи)
 
