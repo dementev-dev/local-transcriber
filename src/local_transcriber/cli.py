@@ -24,6 +24,45 @@ def main(
     compute_type: str = typer.Option("int8", "--compute-type", help="Тип вычислений"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Подробный вывод"),
 ) -> None:
+    try:
+        _run(file, model, language, output, device, compute_type, verbose)
+    except KeyboardInterrupt:
+        console.print("\nПрервано пользователем.", style="yellow")
+        raise SystemExit(130)
+    except SystemExit:
+        raise
+    except (FileNotFoundError, ValueError) as exc:
+        console.print(f"Ошибка: {exc}", style="red bold")
+        raise SystemExit(1)
+    except Exception as exc:
+        if _is_cuda_error(exc) and sys.platform == "win32":
+            console.print(
+                "GPU на Windows требует CUDA toolkit (включает cuBLAS).\n"
+                "Установите одним из способов:\n"
+                "  choco install cuda\n"
+                "  winget install -e --id Nvidia.CUDA\n"
+                "После установки перезапустите терминал.",
+                style="yellow",
+            )
+        if verbose:
+            console.print_exception()
+        else:
+            console.print(f"Ошибка: {exc}", style="red bold")
+            console.print(
+                "Запустите с --verbose для полного traceback.", style="dim"
+            )
+        raise SystemExit(1)
+
+
+def _run(
+    file: Path,
+    model: str,
+    language: str,
+    output: Path | None,
+    device: str,
+    compute_type: str,
+    verbose: bool,
+) -> None:
     start = time.monotonic()
 
     check_ffmpeg()
@@ -41,29 +80,17 @@ def main(
     def on_segment(seg: Segment) -> None:
         console.print(f"  [{seg.start:.2f}s] {seg.text.strip()}")
 
-    try:
-        with Status("Подготавливаю запуск...", console=console) as status:
-            result = transcribe(
-                file_path=validated_file,
-                model_name=model_path,
-                device=resolved_device,
-                compute_type=compute_type,
-                language=language if language != "auto" else None,
-                on_segment=on_segment if verbose else None,
-                on_status=status.update,
-                strict_device=strict,
-            )
-    except (RuntimeError, ValueError) as exc:
-        if _is_cuda_error(exc) and sys.platform == "win32":
-            console.print(
-                "GPU на Windows требует CUDA toolkit (включает cuBLAS).\n"
-                "Установите одним из способов:\n"
-                "  choco install cuda\n"
-                "  winget install -e --id Nvidia.CUDA\n"
-                "После установки перезапустите терминал.",
-                style="yellow",
-            )
-        raise
+    with Status("Подготавливаю запуск...", console=console) as status:
+        result = transcribe(
+            file_path=validated_file,
+            model_name=model_path,
+            device=resolved_device,
+            compute_type=compute_type,
+            language=language if language != "auto" else None,
+            on_segment=on_segment if verbose else None,
+            on_status=status.update,
+            strict_device=strict,
+        )
 
     if result.device_used != resolved_device:
         if requested_device == "auto":

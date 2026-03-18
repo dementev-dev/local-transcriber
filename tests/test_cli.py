@@ -333,3 +333,73 @@ def test_cli_strict_device_passed_to_transcribe(tmp_path):
         runner.invoke(app, [str(audio)])
 
     assert mock_transcribe.call_args[1]["strict_device"] is False
+
+
+def test_cli_keyboard_interrupt(tmp_path):
+    """Ctrl+C → exit code 130, 'Прервано пользователем' in output."""
+    audio = tmp_path / "test.mp3"
+    audio.write_bytes(b"fake")
+
+    with (
+        patch("local_transcriber.cli.check_ffmpeg"),
+        patch("local_transcriber.cli.validate_input_file", return_value=audio),
+        patch("local_transcriber.cli.detect_device", return_value="cpu"),
+        patch("local_transcriber.cli.ensure_model_available", return_value="/models/large-v3"),
+        patch("local_transcriber.cli.transcribe", side_effect=KeyboardInterrupt),
+        patch("local_transcriber.cli.write_transcript"),
+    ):
+        out = runner.invoke(app, [str(audio)])
+
+    assert out.exit_code == 130
+    assert "Прервано пользователем" in out.output
+
+
+def test_cli_user_error_no_traceback(tmp_path):
+    """FileNotFoundError → clean message, no traceback."""
+    audio = tmp_path / "missing.mp3"
+
+    with patch("local_transcriber.cli.check_ffmpeg"):
+        out = runner.invoke(app, [str(audio)])
+
+    assert out.exit_code == 1
+    assert "Ошибка" in out.output
+    assert "Traceback" not in out.output
+
+
+def test_cli_unexpected_error_verbose_traceback(tmp_path):
+    """Unexpected error with --verbose → traceback shown."""
+    audio = tmp_path / "test.mp3"
+    audio.write_bytes(b"fake")
+
+    with (
+        patch("local_transcriber.cli.check_ffmpeg"),
+        patch("local_transcriber.cli.validate_input_file", return_value=audio),
+        patch("local_transcriber.cli.detect_device", return_value="cpu"),
+        patch("local_transcriber.cli.ensure_model_available", return_value="/models/large-v3"),
+        patch("local_transcriber.cli.transcribe", side_effect=RuntimeError("unexpected boom")),
+        patch("local_transcriber.cli.write_transcript"),
+    ):
+        out = runner.invoke(app, [str(audio), "--verbose"])
+
+    assert out.exit_code == 1
+    assert "unexpected boom" in out.output
+
+
+def test_cli_unexpected_error_no_verbose_hint(tmp_path):
+    """Unexpected error without --verbose → hint to use --verbose."""
+    audio = tmp_path / "test.mp3"
+    audio.write_bytes(b"fake")
+
+    with (
+        patch("local_transcriber.cli.check_ffmpeg"),
+        patch("local_transcriber.cli.validate_input_file", return_value=audio),
+        patch("local_transcriber.cli.detect_device", return_value="cpu"),
+        patch("local_transcriber.cli.ensure_model_available", return_value="/models/large-v3"),
+        patch("local_transcriber.cli.transcribe", side_effect=RuntimeError("unexpected boom")),
+        patch("local_transcriber.cli.write_transcript"),
+    ):
+        out = runner.invoke(app, [str(audio)])
+
+    assert out.exit_code == 1
+    assert "Ошибка" in out.output
+    assert "--verbose" in out.output

@@ -261,10 +261,10 @@
 
 > PRD-ссылки: 6 (риски)
 
-- [ ] Graceful Ctrl+C: перехват `KeyboardInterrupt` в cli.py → `console.print("Прервано пользователем", style="yellow")` + `raise SystemExit(130)`
-- [ ] Красивые ошибки: обернуть main в try/except, для пользовательских ошибок (файл не найден, ffmpeg, OOM) — вывод через rich без traceback; для неожиданных — traceback только с `--verbose`
-- [ ] `--verbose` режим: реализуется через `on_segment` callback в `transcribe()` (уже заложен в шаге 3) — печатать каждый сегмент в stderr по мере поступления
-- [ ] Проверка: неподдерживаемое расширение → warning, но попытка продолжить
+- [x] Graceful Ctrl+C: перехват `KeyboardInterrupt` в cli.py → `console.print("Прервано пользователем", style="yellow")` + `raise SystemExit(130)`
+- [x] Красивые ошибки: обернуть main в try/except, для пользовательских ошибок (файл не найден, ffmpeg, OOM) — вывод через rich без traceback; для неожиданных — traceback только с `--verbose`
+- [x] `--verbose` режим: реализуется через `on_segment` callback в `transcribe()` (уже заложен в шаге 3) — печатать каждый сегмент в stderr по мере поступления
+- [x] Проверка: неподдерживаемое расширение → warning, но попытка продолжить
 
 **Критерий готовности**: ручной прогон edge cases — несуществующий файл, .txt файл, Ctrl+C во время работы.
 
