@@ -30,7 +30,14 @@ powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | ie
 uv tool install git+https://github.com/dementev-dev/local-transcriber
 ```
 
-**3. Готово:**
+**3. (Опционально) GPU-ускорение:**
+
+Если есть NVIDIA GPU — транскрипция будет в 5–10× быстрее. Требуется **CUDA 12** (ctranslate2 4.7 не совместим с CUDA 11 и 13).
+
+- **Windows**: `winget install -e --id Nvidia.CUDA --version 12.9` (от администратора), перезапустить терминал
+- **Linux / WSL2**: работает из коробки (нужен только драйвер: `nvidia-smi`)
+
+**4. Готово:**
 
 ```bash
 transcribe meeting.mp4
@@ -103,7 +110,7 @@ transcribe *.mp4 --force
 |  | Linux / WSL2 | macOS | Windows |
 |---|---|---|---|
 | CPU | ✅ | ✅ | ✅ |
-| GPU (NVIDIA) | ✅ авто | — | ✅ (нужен CUDA toolkit) |
+| GPU (NVIDIA) | ✅ авто | — | ✅ (нужен CUDA 12) |
 
 <details>
 <summary>Linux / WSL2</summary>
@@ -126,9 +133,9 @@ transcribe *.mp4 --force
 <summary>Windows</summary>
 
 - CPU работает из коробки
-- Для GPU нужен CUDA toolkit:
+- Для GPU нужен **CUDA 12** (ctranslate2 4.7 не совместим с CUDA 11 и 13):
   ```
-  winget install -e --id Nvidia.CUDA
+  winget install -e --id Nvidia.CUDA --version 12.9
   ```
   > `winget install` требует запуска от имени администратора (elevated terminal).
   > `uv tool install` работает без админа (ставит в пользовательскую директорию).

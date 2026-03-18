@@ -225,7 +225,7 @@ def _create_model(model_name: str, device: str, compute_type: str):
 
 def _is_cuda_error(exc: BaseException) -> bool:
     msg = str(exc).lower()
-    return "cuda" in msg or "out of memory" in msg
+    return any(k in msg for k in ("cuda", "cublas", "cudnn", "out of memory"))
 
 
 def _is_missing_socksio_error(exc: BaseException) -> bool:
