@@ -30,7 +30,6 @@ MODEL_ALLOW_PATTERNS = [
 
 MODEL_REQUIRED_FILES = [
     "config.json",
-    "preprocessor_config.json",
     "model.bin",
     "tokenizer.json",
 ]

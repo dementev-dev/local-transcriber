@@ -6,7 +6,7 @@ import typer
 from rich.console import Console
 from rich.status import Status
 
-from .config import load_config, resolve_defaults
+from .config import apply_device_defaults, load_config, resolve_defaults
 from .formatter import format_transcript, write_transcript
 from .transcriber import (
     Segment,
@@ -34,27 +34,29 @@ console = Console(stderr=True)
 def main(
     files: list[Path] = typer.Argument(..., help="Пути к аудио/видеофайлам"),
     model: str | None = typer.Option(
-        None, "--model", "-m", show_default=False, help="Модель Whisper [по умолч.: large-v3]"
+        None, "--model", "-m", show_default=False, help="Модель Whisper [по умолч.: medium]"
     ),
     language: str | None = typer.Option(
-        None, "--language", "-l", show_default=False, help="Язык (ru|en|auto) [по умолч.: auto]"
+        None, "--language", "-l", show_default=False, help="Язык [по умолч.: ru]"
     ),
     output: Path | None = typer.Option(None, "--output", "-o", help="Путь к выходному файлу"),
     device: str | None = typer.Option(
         None, "--device", "-d", show_default=False, help="Устройство (auto|cpu|cuda) [по умолч.: auto]"
     ),
     compute_type: str | None = typer.Option(
-        None, "--compute-type", show_default=False, help="Тип вычислений [по умолч.: int8]"
+        None, "--compute-type", show_default=False,
+        help="Тип вычислений [по умолч.: float16 (GPU) / float32 (CPU)]"
     ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Подробный вывод"),
     force: bool = typer.Option(False, "--force", "-f", help="Перезаписать существующие транскрипты"),
 ) -> None:
     try:
         config = load_config()
-        defaults = resolve_defaults(
-            {"model": model, "language": language, "device": device, "compute_type": compute_type},
-            config,
-        )
+        cli_values = {"model": model, "language": language, "device": device, "compute_type": compute_type}
+        defaults = resolve_defaults(cli_values, config)
+
+        resolved_device = detect_device(defaults["device"])
+        defaults = apply_device_defaults(defaults, resolved_device, cli_values, config)
 
         expanded = expand_globs(files)
         if not expanded:

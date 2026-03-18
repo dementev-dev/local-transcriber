@@ -8,10 +8,15 @@ else:
     import tomli as tomllib
 
 HARDCODED_DEFAULTS: dict[str, str] = {
-    "model": "large-v3",
-    "language": "auto",
+    "model": "medium",
+    "language": "ru",
     "device": "auto",
-    "compute_type": "int8",
+    "compute_type": "float32",
+}
+
+DEVICE_DEFAULTS: dict[str, dict[str, str]] = {
+    "cuda": {"model": "medium", "compute_type": "float16"},
+    "cpu": {"model": "medium", "compute_type": "float32"},
 }
 
 _VALID_KEYS = set(HARDCODED_DEFAULTS)
@@ -82,4 +87,24 @@ def resolve_defaults(
             result[key] = config[key]
         else:
             result[key] = HARDCODED_DEFAULTS[key]
+    return result
+
+
+def apply_device_defaults(
+    defaults: dict[str, str],
+    resolved_device: str,
+    cli_values: dict[str, str | None],
+    config: dict[str, str],
+) -> dict[str, str]:
+    """Применяет device-aware дефолты для model и compute_type,
+    если они не были явно заданы через CLI или конфиг."""
+    device_defs = DEVICE_DEFAULTS.get(resolved_device, {})
+    if not device_defs:
+        return defaults
+
+    result = dict(defaults)
+    for key in ("model", "compute_type"):
+        if cli_values.get(key) is None and key not in config:
+            if key in device_defs:
+                result[key] = device_defs[key]
     return result

@@ -4,6 +4,7 @@ from unittest.mock import patch
 import pytest
 
 from local_transcriber.config import (
+    apply_device_defaults,
     find_config_file,
     load_config,
     resolve_defaults,
@@ -89,8 +90,41 @@ def test_resolve_defaults_hardcoded_fallback():
         {"model": None, "language": None, "device": None, "compute_type": None}, {}
     )
     assert result == {
-        "model": "large-v3",
-        "language": "auto",
+        "model": "medium",
+        "language": "ru",
         "device": "auto",
-        "compute_type": "int8",
+        "compute_type": "float32",
     }
+
+
+def test_apply_device_defaults_cuda():
+    defaults = {"model": "medium", "language": "ru", "device": "auto", "compute_type": "float32"}
+    cli = {"model": None, "language": None, "device": None, "compute_type": None}
+    result = apply_device_defaults(defaults, "cuda", cli, {})
+    assert result["model"] == "medium"
+    assert result["compute_type"] == "float16"
+
+
+def test_apply_device_defaults_cpu():
+    defaults = {"model": "medium", "language": "ru", "device": "auto", "compute_type": "float32"}
+    cli = {"model": None, "language": None, "device": None, "compute_type": None}
+    result = apply_device_defaults(defaults, "cpu", cli, {})
+    assert result["model"] == "medium"
+    assert result["compute_type"] == "float32"
+
+
+def test_apply_device_defaults_cli_overrides():
+    defaults = {"model": "large-v3", "language": "ru", "device": "auto", "compute_type": "int8"}
+    cli = {"model": "large-v3", "language": None, "device": None, "compute_type": "int8"}
+    result = apply_device_defaults(defaults, "cuda", cli, {})
+    assert result["model"] == "large-v3"
+    assert result["compute_type"] == "int8"
+
+
+def test_apply_device_defaults_config_overrides():
+    defaults = {"model": "small", "language": "ru", "device": "auto", "compute_type": "int8"}
+    cli = {"model": None, "language": None, "device": None, "compute_type": None}
+    config = {"model": "small", "compute_type": "int8"}
+    result = apply_device_defaults(defaults, "cuda", cli, config)
+    assert result["model"] == "small"
+    assert result["compute_type"] == "int8"
