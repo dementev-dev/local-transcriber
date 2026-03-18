@@ -57,6 +57,12 @@ transcribe meeting.mp4
 uv tool install --force git+https://github.com/dementev-dev/local-transcriber
 ```
 
+**Удаление:**
+
+```bash
+uv tool uninstall local-transcriber
+```
+
 ## Использование
 
 ```bash
