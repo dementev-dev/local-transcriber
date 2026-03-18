@@ -2,6 +2,7 @@ from datetime import datetime
 from pathlib import Path
 
 from local_transcriber.formatter import (
+    _group_segments,
     format_timestamp,
     format_transcript,
     write_transcript,
@@ -50,9 +51,8 @@ def test_format_transcript_basic():
     assert "**Длительность**: 02:00" in content
     assert "**Устройство**: CUDA (NVIDIA GeForce RTX 3060)" in content
     assert "---" in content
-    # Проверяем пробел между ] и текстом независимо от ведущих пробелов в seg.text
-    assert "[00:00.00 - 00:04.82] Добрый день, коллеги." in content
-    assert "[00:04.82 - 00:09.15] Первый вопрос." in content
+    # Соседние сегменты без паузы объединяются в один абзац
+    assert "[00:00.00 - 00:09.15] Добрый день, коллеги. Первый вопрос." in content
 
 
 def test_format_transcript_segment_no_leading_space():
@@ -122,6 +122,50 @@ def test_format_transcript_long():
     # Timestamps should use hours format
     assert "[00:00:00.00 - 00:00:10.50] Начало." in content
     assert "[01:01:40.00 - 01:01:50.25] Конец." in content
+
+
+def test_group_segments_merges_adjacent():
+    """Соседние сегменты без паузы объединяются."""
+    segments = [
+        Segment(start=0.0, end=3.0, text=" Первый."),
+        Segment(start=3.0, end=6.0, text=" Второй."),
+        Segment(start=6.0, end=9.0, text=" Третий."),
+    ]
+    groups = _group_segments(segments)
+    assert len(groups) == 1
+    assert groups[0].start == 0.0
+    assert groups[0].end == 9.0
+    assert groups[0].text == "Первый. Второй. Третий."
+
+
+def test_group_segments_splits_on_pause():
+    """Пауза > 2с разбивает на отдельные абзацы."""
+    segments = [
+        Segment(start=0.0, end=3.0, text=" Первый."),
+        Segment(start=3.0, end=6.0, text=" Второй."),
+        Segment(start=9.0, end=12.0, text=" После паузы."),
+    ]
+    groups = _group_segments(segments)
+    assert len(groups) == 2
+    assert groups[0].text == "Первый. Второй."
+    assert groups[1].text == "После паузы."
+
+
+def test_group_segments_splits_on_max_duration():
+    """Абзац разбивается при превышении макс. длительности."""
+    segments = [
+        Segment(start=0.0, end=30.0, text=" Длинный."),
+        Segment(start=30.0, end=55.0, text=" Ещё."),
+        Segment(start=55.0, end=80.0, text=" Перелив."),
+    ]
+    groups = _group_segments(segments)
+    assert len(groups) == 2
+    assert groups[0].text == "Длинный. Ещё."
+    assert groups[1].text == "Перелив."
+
+
+def test_group_segments_empty():
+    assert _group_segments([]) == []
 
 
 def test_write_transcript(tmp_path):

@@ -1,7 +1,44 @@
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from .transcriber import TranscribeResult
+from .transcriber import Segment, TranscribeResult
+
+_PAUSE_THRESHOLD_S = 2.0  # пауза между сегментами для разбиения на абзацы
+_MAX_PARAGRAPH_S = 60.0  # максимальная длительность абзаца
+
+
+@dataclass
+class _Paragraph:
+    start: float
+    end: float
+    text: str
+
+
+def _group_segments(segments: list[Segment]) -> list[_Paragraph]:
+    """Объединяет мелкие сегменты в абзацы по паузам и макс. длительности."""
+    if not segments:
+        return []
+
+    paragraphs: list[_Paragraph] = []
+    cur_start = segments[0].start
+    cur_end = segments[0].end
+    cur_texts: list[str] = [segments[0].text.strip()]
+
+    for seg in segments[1:]:
+        gap = seg.start - cur_end
+        duration = seg.end - cur_start
+        if gap >= _PAUSE_THRESHOLD_S or duration > _MAX_PARAGRAPH_S:
+            paragraphs.append(_Paragraph(cur_start, cur_end, " ".join(cur_texts)))
+            cur_start = seg.start
+            cur_end = seg.end
+            cur_texts = [seg.text.strip()]
+        else:
+            cur_end = seg.end
+            cur_texts.append(seg.text.strip())
+
+    paragraphs.append(_Paragraph(cur_start, cur_end, " ".join(cur_texts)))
+    return paragraphs
 
 
 def format_timestamp(seconds: float, use_hours: bool = False) -> str:
@@ -56,11 +93,11 @@ def format_transcript(
         lines.append("")
         lines.append("*Речь не обнаружена.*")
     else:
-        for seg in result.segments:
-            start = format_timestamp(seg.start, use_hours=use_hours)
-            end = format_timestamp(seg.end, use_hours=use_hours)
+        for para in _group_segments(result.segments):
+            start = format_timestamp(para.start, use_hours=use_hours)
+            end = format_timestamp(para.end, use_hours=use_hours)
             lines.append("")
-            lines.append(f"[{start} - {end}] {seg.text.strip()}")
+            lines.append(f"[{start} - {end}] {para.text}")
 
     lines.append("")
     return "\n".join(lines)
