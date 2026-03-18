@@ -1,6 +1,7 @@
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
 from typer.testing import CliRunner
 
 from local_transcriber.cli import app
@@ -234,3 +235,101 @@ def test_cli_resolves_model_before_transcribe(tmp_path):
     mock_ensure_model.assert_called_once()
     call_kwargs = mock_transcribe.call_args[1]
     assert call_kwargs["model_name"] == "/models/large-v3"
+
+
+def test_cli_windows_cuda_diagnostic(tmp_path):
+    """CUDA error on Windows prints choco/winget install hint."""
+    audio = tmp_path / "test.mp3"
+    audio.write_bytes(b"fake")
+
+    with (
+        patch("local_transcriber.cli.check_ffmpeg"),
+        patch("local_transcriber.cli.validate_input_file", return_value=audio),
+        patch("local_transcriber.cli.detect_device", return_value="cuda"),
+        patch("local_transcriber.cli.ensure_model_available", return_value="/models/large-v3"),
+        patch("local_transcriber.cli.transcribe", side_effect=RuntimeError("CUDA error: no device")),
+        patch("local_transcriber.cli.sys") as mock_sys,
+    ):
+        mock_sys.platform = "win32"
+        out = runner.invoke(app, [str(audio), "--device", "cuda"])
+
+    assert out.exit_code == 1
+    assert "choco install cuda" in out.output
+    assert "winget install" in out.output
+
+
+def test_cli_linux_cuda_error_no_windows_hint(tmp_path):
+    """CUDA error on Linux does NOT print Windows-specific hint."""
+    audio = tmp_path / "test.mp3"
+    audio.write_bytes(b"fake")
+
+    with (
+        patch("local_transcriber.cli.check_ffmpeg"),
+        patch("local_transcriber.cli.validate_input_file", return_value=audio),
+        patch("local_transcriber.cli.detect_device", return_value="cuda"),
+        patch("local_transcriber.cli.ensure_model_available", return_value="/models/large-v3"),
+        patch("local_transcriber.cli.transcribe", side_effect=RuntimeError("CUDA error: no device")),
+        patch("local_transcriber.cli.sys") as mock_sys,
+    ):
+        mock_sys.platform = "linux"
+        out = runner.invoke(app, [str(audio), "--device", "cuda"])
+
+    assert out.exit_code == 1
+    assert "choco install cuda" not in out.output
+
+
+def test_cli_device_fallback_warning(tmp_path):
+    """When auto-detected device differs from actual, show fallback warning."""
+    audio = tmp_path / "test.mp3"
+    audio.write_bytes(b"fake")
+    result = _make_result(device_used="cpu")
+
+    with (
+        patch("local_transcriber.cli.check_ffmpeg"),
+        patch("local_transcriber.cli.validate_input_file", return_value=audio),
+        patch("local_transcriber.cli.detect_device", return_value="cuda"),
+        patch("local_transcriber.cli.ensure_model_available", return_value="/models/large-v3"),
+        patch("local_transcriber.cli.transcribe", return_value=result),
+        patch("local_transcriber.cli.write_transcript"),
+    ):
+        # --device auto (default) -> detect_device returns "cuda" but result is "cpu"
+        out = runner.invoke(app, [str(audio)])
+
+    assert "fallback" in out.output
+
+
+def test_cli_strict_device_passed_to_transcribe(tmp_path):
+    """--device cuda passes strict_device=True; default auto passes False."""
+    audio = tmp_path / "test.mp3"
+    audio.write_bytes(b"fake")
+    result = _make_result(device_used="cuda")
+    mock_transcribe = MagicMock(return_value=result)
+
+    with (
+        patch("local_transcriber.cli.check_ffmpeg"),
+        patch("local_transcriber.cli.validate_input_file", return_value=audio),
+        patch("local_transcriber.cli.detect_device", return_value="cuda"),
+        patch("local_transcriber.cli.ensure_model_available", return_value="/models/large-v3"),
+        patch("local_transcriber.cli.transcribe", mock_transcribe),
+        patch("local_transcriber.cli.write_transcript"),
+        patch("local_transcriber.cli.get_gpu_name", return_value="RTX 3060"),
+    ):
+        runner.invoke(app, [str(audio), "--device", "cuda"])
+
+    assert mock_transcribe.call_args[1]["strict_device"] is True
+
+    mock_transcribe.reset_mock()
+    result_cpu = _make_result(device_used="cpu")
+    mock_transcribe.return_value = result_cpu
+
+    with (
+        patch("local_transcriber.cli.check_ffmpeg"),
+        patch("local_transcriber.cli.validate_input_file", return_value=audio),
+        patch("local_transcriber.cli.detect_device", return_value="cpu"),
+        patch("local_transcriber.cli.ensure_model_available", return_value="/models/large-v3"),
+        patch("local_transcriber.cli.transcribe", mock_transcribe),
+        patch("local_transcriber.cli.write_transcript"),
+    ):
+        runner.invoke(app, [str(audio)])
+
+    assert mock_transcribe.call_args[1]["strict_device"] is False

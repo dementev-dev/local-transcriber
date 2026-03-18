@@ -355,3 +355,61 @@ def test_ensure_model_available_rejects_incomplete_local_directory(tmp_path):
 
     with pytest.raises(ValueError, match="Неполная локальная модель"):
         ensure_model_available(str(model_dir))
+
+
+@patch("local_transcriber.transcriber.WhisperModel")
+def test_transcribe_strict_cuda_error(mock_model_cls):
+    """strict_device=True + CUDA error -> raise, без fallback."""
+    mock_model_cls.side_effect = RuntimeError("CUDA out of memory")
+
+    with pytest.raises(RuntimeError, match="CUDA out of memory"):
+        transcribe(
+            file_path=Path("test.mp3"),
+            model_name="tiny",
+            device="cuda",
+            strict_device=True,
+        )
+
+
+@patch("local_transcriber.transcriber.WhisperModel")
+def test_transcribe_non_strict_cuda_fallback(mock_model_cls):
+    """strict_device=False + CUDA error -> fallback на CPU."""
+    raw_segments = _make_raw_segments(2)
+    info = _make_info()
+
+    cpu_instance = MagicMock()
+    cpu_instance.transcribe.return_value = (iter(raw_segments), info)
+
+    def model_side_effect(model_name, device, compute_type):
+        if device == "cuda":
+            raise RuntimeError("CUDA out of memory")
+        return cpu_instance
+
+    mock_model_cls.side_effect = model_side_effect
+
+    with pytest.warns(UserWarning, match="Переключение на CPU"):
+        result = transcribe(
+            file_path=Path("test.mp3"),
+            model_name="tiny",
+            device="cuda",
+            strict_device=False,
+        )
+
+    assert result.device_used == "cpu"
+    assert len(result.segments) == 2
+
+
+@patch("local_transcriber.transcriber.WhisperModel")
+def test_transcribe_strict_cuda_error_during_transcription(mock_model_cls):
+    """strict_device=True + CUDA error during transcription -> raise."""
+    cuda_instance = MagicMock()
+    cuda_instance.transcribe.side_effect = RuntimeError("CUDA error during transcription")
+    mock_model_cls.return_value = cuda_instance
+
+    with pytest.raises(RuntimeError, match="CUDA error during transcription"):
+        transcribe(
+            file_path=Path("test.mp3"),
+            model_name="tiny",
+            device="cuda",
+            strict_device=True,
+        )

@@ -8,6 +8,7 @@ dependencies = [
     "rich",
     "faster-whisper>=1.2.1",
     "socksio>=1.0.0",
+    "nvidia-cublas-cu12>=12.4; sys_platform == 'linux' and platform_machine == 'x86_64'",
 ]
 
 [project.scripts]

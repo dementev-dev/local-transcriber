@@ -3,7 +3,12 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from faster_whisper import WhisperModel
+# Должен быть ДО импорта faster_whisper / ctranslate2
+from local_transcriber._cuda_bootstrap import ensure_cublas_loadable
+
+ensure_cublas_loadable()
+
+from faster_whisper import WhisperModel  # noqa: E402
 from huggingface_hub import snapshot_download
 from huggingface_hub.errors import LocalEntryNotFoundError
 
@@ -55,6 +60,7 @@ def transcribe(
     language: str | None = None,
     on_segment: Callable[[Segment], None] | None = None,
     on_status: Callable[[str], None] | None = None,
+    strict_device: bool = False,
 ) -> TranscribeResult:
     actual_device = device
     lang_arg = language if language and language != "auto" else None
@@ -64,6 +70,8 @@ def transcribe(
         model = _create_model(model_name, device, compute_type)
     except (RuntimeError, ValueError) as exc:
         if device != "cpu" and _is_cuda_error(exc):
+            if strict_device:
+                raise
             warnings.warn(
                 f"Не удалось загрузить модель на {device}: {exc}. "
                 "Переключение на CPU.",
@@ -80,6 +88,8 @@ def transcribe(
         segments, info = _run_transcription(model, file_path, lang_arg, on_segment)
     except (RuntimeError, ValueError) as exc:
         if actual_device != "cpu" and _is_cuda_error(exc):
+            if strict_device:
+                raise
             warnings.warn(
                 f"CUDA ошибка при транскрипции: {exc}. "
                 "Переключение на CPU и повтор.",
