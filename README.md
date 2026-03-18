@@ -1,44 +1,54 @@
 # local-transcriber
 
-Локальный CLI для транскрипции аудио и видео через [faster-whisper](https://github.com/SYSTRAN/faster-whisper).
-Принимает файл, распознаёт речь на машине (без внешних API) и создаёт markdown с таймкодами.
-Результат удобен для последующей обработки ИИ — суммаризация, action items и т.д.
-Работает с GPU (NVIDIA CUDA, быстро) и CPU (медленнее).
+Локальная транскрипция аудио и видео в markdown — без облака, без API-ключей.
 
 ```bash
 transcribe meeting.mp4
 # → meeting-transcript.md
 ```
 
-## Требования
-
-- Python ≥ 3.10
-- [uv](https://docs.astral.sh/uv/) — менеджер пакетов
-- ffmpeg в PATH
-- (Опционально) NVIDIA GPU + установленный драйвер (проверка: `nvidia-smi`)
+- **Полностью локально** — данные не покидают машину
+- **Авто-GPU** — автоматически использует NVIDIA CUDA, если доступен
+- **Батч-режим** — обработка нескольких файлов за один вызов
+- **Markdown с таймкодами** — удобен для суммаризации ИИ
+- **Аудио и видео** — mp3, wav, mp4, mkv и [другие форматы](#поддерживаемые-форматы)
 
 ## Установка
 
-```bash
-git clone <repo>
-cd local-transcriber
-uv tool install .
-```
-
-После этого команда `transcribe` доступна глобально в PATH.
-
-Обновление после `git pull`:
+**1. Установить [uv](https://docs.astral.sh/uv/getting-started/installation/)** (если ещё нет):
 
 ```bash
-uv tool install --force .
+curl -LsSf https://astral.sh/uv/install.sh | sh          # Linux / macOS
+```
+```powershell
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"  # Windows
 ```
 
-Модели скачиваются автоматически при первом запуске (~1.5 GB для medium, ~3 GB для large-v3),
-нужен доступ в интернет (Hugging Face Hub).
+**2. Установить transcriber:**
 
-> **Если `transcribe: command not found`** — убедитесь, что директория
-> инструментов uv добавлена в PATH. Выполните `uv tool dir --bin`
-> чтобы узнать путь, и добавьте его в PATH вашего shell.
+```bash
+uv tool install git+https://github.com/dementev-dev/local-transcriber
+```
+
+**3. Готово:**
+
+```bash
+transcribe meeting.mp4
+```
+Модели скачиваются автоматически при первом запуске (~1.5 GB для medium), нужен доступ в интернет.
+
+<details>
+<summary><code>transcribe: command not found</code></summary>
+
+Выполните `uv tool update-shell` — это добавит нужный путь в PATH автоматически.
+
+</details>
+
+**Обновление:**
+
+```bash
+uv tool install --force git+https://github.com/dementev-dev/local-transcriber
+```
 
 ## Использование
 
@@ -73,33 +83,8 @@ transcribe *.mp4 --force
 
 - Файлы с существующим транскриптом (`*-transcript.md`) автоматически пропускаются
 - `--force` / `-f` — перезаписать существующие транскрипты
-- В конце выводится итоговая статистика: обработано, пропущено, ошибок
 - При ошибке в одном файле остальные продолжают обрабатываться
 - `--output` несовместим с несколькими файлами
-
-### Конфигурационный файл
-
-Дефолтные параметры можно задать в `.transcriber.toml`:
-
-```toml
-language = "ru"
-model = "large-v3"
-compute_type = "float16"
-```
-
-Порядок поиска:
-1. `.transcriber.toml` в текущей директории (проектный конфиг)
-2. `~/.config/transcriber/config.toml` (глобальный конфиг пользователя)
-
-Приоритет: **CLI-аргумент > конфиг > device-aware дефолт > встроенный дефолт**.
-
-Дефолты зависят от устройства (если не заданы явно):
-
-| Параметр | GPU (CUDA) | CPU |
-|----------|-----------|-----|
-| model | medium | medium |
-| compute_type | float16 | float32 |
-| language | ru | ru |
 
 ### Опции CLI
 
@@ -113,7 +98,76 @@ compute_type = "float16"
 | `--force` | `-f` | — | Перезаписать существующие транскрипты |
 | `--verbose` | `-v` | — | Подробный вывод |
 
-## Модели
+## Платформы
+
+|  | Linux / WSL2 | macOS | Windows |
+|---|---|---|---|
+| CPU | ✅ | ✅ | ✅ |
+| GPU (NVIDIA) | ✅ авто | — | ✅ (нужен CUDA toolkit) |
+
+<details>
+<summary>Linux / WSL2</summary>
+
+- GPU работает из коробки — cuBLAS ставится автоматически как зависимость
+- Нужен только драйвер NVIDIA (проверка: `nvidia-smi`)
+- На ARM (aarch64) cuBLAS через pip недоступен — нужен системный CUDA toolkit
+
+</details>
+
+<details>
+<summary>macOS</summary>
+
+- Работает на CPU (Intel и Apple Silicon)
+- GPU (CUDA) недоступен — NVIDIA не поддерживает macOS
+
+</details>
+
+<details>
+<summary>Windows</summary>
+
+- CPU работает из коробки
+- Для GPU нужен CUDA toolkit:
+  ```
+  winget install -e --id Nvidia.CUDA
+  ```
+  > `winget install` требует запуска от имени администратора (elevated terminal).
+  > `uv tool install` работает без админа (ставит в пользовательскую директорию).
+- После установки CUDA перезапустите терминал
+
+</details>
+
+## Конфигурация
+
+Дефолтные параметры можно задать в `.transcriber.toml`:
+
+```toml
+model = "large-v3"
+language = "en"
+```
+
+Порядок поиска:
+1. `.transcriber.toml` в текущей директории
+2. `~/.config/transcriber/config.toml`
+
+Приоритет: **CLI-аргумент > конфиг > device-aware дефолт > встроенный дефолт**.
+
+Дефолты зависят от устройства:
+
+| Параметр | GPU (CUDA) | CPU |
+|----------|-----------|-----|
+| model | medium | medium |
+| compute_type | float16 | float32 |
+| language | ru | ru |
+
+## Модели и GPU
+
+Рекомендации:
+- **По умолчанию:** `medium` — хороший баланс скорости и качества
+- **Макс. качество:** `large-v3` + `--compute-type float16` (GPU)
+- **Быстрый тест:** `tiny` — для проверки пайплайна
+
+<details>
+<summary>Таблица моделей</summary>
 
 | Модель | Размер на диске | VRAM (int8) | Скорость (GPU) | Качество |
 |--------|----------------|-------------|----------------|----------|
@@ -123,7 +177,10 @@ compute_type = "float16"
 | `medium` | ~1.5 GB | ~2.5 GB | ★★ | ★★★★ |
 | `large-v3` | ~3 GB | ~2.5 GB | ★ | ★★★★★ |
 
-### Типы квантизации (`--compute-type`)
+</details>
+
+<details>
+<summary>Типы квантизации (--compute-type)</summary>
 
 | Тип | Устройство | VRAM/RAM | Качество | Когда использовать |
 |-----|-----------|----------|----------|--------------------|
@@ -133,77 +190,14 @@ compute_type = "float16"
 | `float32` | CPU | Среднее | Отлично | **По умолчанию для CPU** |
 
 **Важно:** `int8` на длинных записях может давать галлюцинации (повтор фраз, потеря контента).
-`float16` и `float32` значительно стабильнее на записях >20 минут с техническими терминами.
+`float16` и `float32` значительно стабильнее на записях >20 минут.
 
-## Установка ffmpeg
+</details>
 
-- **Linux / WSL2**: `sudo apt install ffmpeg`
-- **macOS**: `brew install ffmpeg`
-- **Windows**: `winget install ffmpeg`
+Подробнее: бенчмарки, совместимость GPU, результаты тестирования — [docs/gpu.md](docs/gpu.md).
 
-## GPU и CUDA
-
-Для работы с GPU необходим установленный NVIDIA драйвер
-(проверка: `nvidia-smi` в терминале). Драйвер предоставляет `libcuda.so.1`,
-без которого CUDA не работает — его нельзя поставить через pip.
-
-### По платформам
-
-- **Linux / WSL2 (x86_64)**: библиотека cuBLAS ставится автоматически
-  (зависимость `nvidia-cublas-cu12` подтягивается при установке).
-  Дополнительных шагов не требуется.
-  На ARM (aarch64) cuBLAS через pip недоступен — нужен системный CUDA toolkit.
-- **Windows**: нужен системный CUDA toolkit
-  (`choco install cuda` или `winget install -e --id Nvidia.CUDA`)
-
-### Режимы `--device`
-
-- `auto` (по умолчанию) — выберет GPU если `nvidia-smi` доступен, иначе CPU
-- `cuda` — строго GPU, ошибка если недоступен (без silent fallback)
-- `cpu` — строго CPU
-
-### Совместимость GPU
-
-| GPU | VRAM | medium float16 | large-v3 float16 | Рекомендация |
-|-----|------|---------------|-----------------|--------------|
-| RTX 3060 | 6 GB | ✅ | ✅ | medium float16 (дефолт) |
-| RTX 4050 | 6 GB | ✅ | ✅ | medium float16 |
-| Quadro M3000M | 4 GB | ✅ | ⚠️ tight | medium float16 или int8 |
-
-### Ожидаемая скорость
-
-Замеры на RTX 3060 Laptop (6 GB) и Intel CPU (WSL2):
-
-| Конфигурация | 16 мин файл | 42 мин файл | Отн. скорость |
-|-------------|-------------|-------------|---------------|
-| GPU + medium float16 | ~35с | ~133с | ~19x реалтайм |
-| GPU + large-v3 float16 | ~90с | ~350с | ~7x реалтайм |
-| CPU + medium float32 | 613с (10 мин) | ~26 мин* | ~1.5x реалтайм |
-| CPU + large-v3 int8 | 839с (14 мин) | ~37 мин* | ~1:1 реалтайм |
-
-*Оценка на основе пропорции.
-
-### Результаты тестирования качества
-
-Тесты проведены на реальных записях рабочих созвонов (русский язык, технические термины:
-SQL, PostgreSQL, Greenplum, Airflow, ClickHouse, Docker, CDR, GTP, MAP).
-
-| Конфигурация | Качество (длинная запись, 42 мин) | Проблемы |
-|---|---|---|
-| large-v3 int8 GPU | Плохо | Галлюцинации (фразы ×25), потеря контента |
-| large-v3 float16 GPU | Отлично | — |
-| medium float16 GPU | Хорошо | Редкие мелкие ляпы в терминах |
-| medium float32 CPU | Хорошо | Сопоставимо с large-v3 int8, без галлюцинаций |
-| large-v3 int8 CPU | Хорошо | Без галлюцинаций (на коротких файлах) |
-
-**Ключевые выводы:**
-
-1. **Указание языка (`--language ru`) критично** — auto-detect может ошибиться и выдать мусор
-2. **float16/float32 стабильнее int8** — особенно на записях >20 минут
-3. **medium + float16 на GPU — лучший баланс** скорости и качества для повседневного использования
-4. **large-v3 + float16 на GPU** — для максимального качества важных записей
-
-## Формат выходного файла
+<details>
+<summary>Формат вывода</summary>
 
 ```markdown
 # Транскрипт: meeting.mp4
@@ -217,20 +211,29 @@ SQL, PostgreSQL, Greenplum, Airflow, ClickHouse, Docker, CDR, GTP, MAP).
 ---
 
 [00:00:00.00 - 00:00:15.40] Добрый день, коллеги. Сегодня мы обсудим результаты
-квартала. Первый вопрос — по метрикам продукта. Как вы видите на слайде, MAU вырос
-на двадцать три процента по сравнению с предыдущим кварталом.
+квартала. Первый вопрос — по метрикам продукта.
 
 [00:00:18.10 - 00:00:25.73] Теперь перейдём к финансовым показателям.
-
-...
 ```
 
 Близкие по времени сегменты автоматически объединяются в абзацы (пауза > 2 сек или длительность > 60 сек разделяет абзацы).
 Таймкоды: `MM:SS.ss`, для записей длиннее 1 часа — `HH:MM:SS.ss`.
+
+</details>
 
 ## Поддерживаемые форматы
 
 - **Аудио**: mp3, wav, flac, ogg, m4a, wma, aac
 - **Видео**: mp4, mkv, avi, mov, webm, ts
 
-Формат определяется по расширению, декодирование выполняет ffmpeg.
+## Для разработчиков
+
+```bash
+git clone https://github.com/dementev-dev/local-transcriber
+cd local-transcriber
+uv sync
+uv run transcribe meeting.mp4   # запуск CLI
+uv run pytest                    # тесты
+```
+
+Подробнее — [CONTRIBUTING.md](CONTRIBUTING.md).

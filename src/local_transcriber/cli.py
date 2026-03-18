@@ -18,7 +18,6 @@ from .transcriber import (
 )
 from .utils import (
     build_output_path,
-    check_ffmpeg,
     detect_device,
     expand_globs,
     get_gpu_name,
@@ -111,7 +110,6 @@ def _run_single(
 ) -> None:
     start = time.monotonic()
 
-    check_ffmpeg()
     validated_file = validate_input_file(file)
     requested_device = defaults["device"]
     resolved_device = detect_device(requested_device)
@@ -198,8 +196,6 @@ def _run_batch(
     verbose: bool,
     force: bool,
 ) -> None:
-    check_ffmpeg()
-
     # Phase 1: Prescan
     to_process: list[Path] = []
     skipped = 0

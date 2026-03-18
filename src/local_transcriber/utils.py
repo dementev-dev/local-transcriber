@@ -1,7 +1,6 @@
 import glob
 import shutil
 import subprocess
-import sys
 import warnings
 from pathlib import Path
 
@@ -9,18 +8,6 @@ SUPPORTED_EXTENSIONS = {
     ".mp3", ".wav", ".flac", ".ogg", ".m4a", ".wma", ".aac",
     ".mp4", ".mkv", ".avi", ".mov", ".webm", ".ts",
 }
-
-
-def check_ffmpeg() -> None:
-    try:
-        subprocess.run(["ffmpeg", "-version"], capture_output=True, check=False)
-    except FileNotFoundError:
-        sys.exit(
-            "ffmpeg не найден в PATH. Установите ffmpeg:\n"
-            "  Linux:   apt install ffmpeg\n"
-            "  Windows: winget install ffmpeg\n"
-            "  macOS:   brew install ffmpeg"
-        )
 
 
 def detect_device(requested: str = "auto") -> str:

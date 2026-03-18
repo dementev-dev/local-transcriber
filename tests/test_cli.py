@@ -40,7 +40,6 @@ def _single_patches(result=None, tmp_file=None, actual_device="cpu"):
     tfr = TranscribeFileResult(result=result, model=model, actual_device=actual_device)
     return [
         patch("local_transcriber.cli.load_config", return_value={}),
-        patch("local_transcriber.cli.check_ffmpeg"),
         patch("local_transcriber.cli.validate_input_file", return_value=tmp_file),
         patch("local_transcriber.cli.detect_device", return_value=actual_device),
         patch("local_transcriber.cli.ensure_model_available", return_value="/models/medium"),
@@ -55,7 +54,7 @@ def test_cli_happy_path_exit_code_zero(tmp_path):
     audio.write_bytes(b"fake")
 
     patches = _single_patches(tmp_file=audio)
-    with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patches[7]:
+    with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6]:
         out = runner.invoke(app, [str(audio)])
 
     assert out.exit_code == 0
@@ -71,7 +70,6 @@ def test_cli_default_options_passed_to_transcribe(tmp_path):
 
     with (
         patch("local_transcriber.cli.load_config", return_value={}),
-        patch("local_transcriber.cli.check_ffmpeg"),
         patch("local_transcriber.cli.validate_input_file", return_value=audio),
         patch("local_transcriber.cli.detect_device", return_value="cpu"),
         patch("local_transcriber.cli.ensure_model_available", return_value="/models/medium"),
@@ -98,7 +96,6 @@ def test_cli_custom_options(tmp_path):
 
     with (
         patch("local_transcriber.cli.load_config", return_value={}),
-        patch("local_transcriber.cli.check_ffmpeg"),
         patch("local_transcriber.cli.validate_input_file", return_value=audio),
         patch("local_transcriber.cli.detect_device", return_value="cuda"),
         patch("local_transcriber.cli.ensure_model_available", return_value="/models/small"),
@@ -131,7 +128,6 @@ def test_cli_verbose_passes_on_segment_callback(tmp_path):
 
     with (
         patch("local_transcriber.cli.load_config", return_value={}),
-        patch("local_transcriber.cli.check_ffmpeg"),
         patch("local_transcriber.cli.validate_input_file", return_value=audio),
         patch("local_transcriber.cli.detect_device", return_value="cpu"),
         patch("local_transcriber.cli.ensure_model_available", return_value="/models/medium"),
@@ -152,7 +148,7 @@ def test_cli_empty_speech_warning(tmp_path):
     result = _make_result(segments=[])
 
     patches = _single_patches(result=result, tmp_file=audio)
-    with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patches[7]:
+    with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6]:
         out = runner.invoke(app, [str(audio)])
 
     assert out.exit_code == 0
@@ -170,7 +166,6 @@ def test_cli_default_output_path(tmp_path):
 
     with (
         patch("local_transcriber.cli.load_config", return_value={}),
-        patch("local_transcriber.cli.check_ffmpeg"),
         patch("local_transcriber.cli.validate_input_file", return_value=audio),
         patch("local_transcriber.cli.detect_device", return_value="cpu"),
         patch("local_transcriber.cli.ensure_model_available", return_value="/models/medium"),
@@ -196,7 +191,6 @@ def test_cli_custom_output_path(tmp_path):
 
     with (
         patch("local_transcriber.cli.load_config", return_value={}),
-        patch("local_transcriber.cli.check_ffmpeg"),
         patch("local_transcriber.cli.validate_input_file", return_value=audio),
         patch("local_transcriber.cli.detect_device", return_value="cpu"),
         patch("local_transcriber.cli.ensure_model_available", return_value="/models/medium"),
@@ -210,19 +204,6 @@ def test_cli_custom_output_path(tmp_path):
     assert written_path == out_file
 
 
-def test_cli_error_exit_code_one(tmp_path):
-    audio = tmp_path / "test.mp3"
-    audio.write_bytes(b"fake")
-
-    with (
-        patch("local_transcriber.cli.load_config", return_value={}),
-        patch("local_transcriber.cli.check_ffmpeg", side_effect=SystemExit(1)),
-    ):
-        out = runner.invoke(app, [str(audio)])
-
-    assert out.exit_code == 1
-
-
 def test_cli_passes_status_callback_to_transcribe(tmp_path):
     audio = tmp_path / "test.mp3"
     audio.write_bytes(b"fake")
@@ -233,7 +214,6 @@ def test_cli_passes_status_callback_to_transcribe(tmp_path):
 
     with (
         patch("local_transcriber.cli.load_config", return_value={}),
-        patch("local_transcriber.cli.check_ffmpeg"),
         patch("local_transcriber.cli.validate_input_file", return_value=audio),
         patch("local_transcriber.cli.detect_device", return_value="cpu"),
         patch("local_transcriber.cli.ensure_model_available", return_value="/models/medium"),
@@ -258,7 +238,6 @@ def test_cli_resolves_model_before_transcribe(tmp_path):
 
     with (
         patch("local_transcriber.cli.load_config", return_value={}),
-        patch("local_transcriber.cli.check_ffmpeg"),
         patch("local_transcriber.cli.validate_input_file", return_value=audio),
         patch("local_transcriber.cli.detect_device", return_value="cpu"),
         patch("local_transcriber.cli.ensure_model_available", return_value="/models/large-v3") as mock_ensure,
@@ -281,7 +260,6 @@ def test_cli_windows_cuda_diagnostic(tmp_path):
 
     with (
         patch("local_transcriber.cli.load_config", return_value={}),
-        patch("local_transcriber.cli.check_ffmpeg"),
         patch("local_transcriber.cli.validate_input_file", return_value=audio),
         patch("local_transcriber.cli.detect_device", return_value="cuda"),
         patch("local_transcriber.cli.ensure_model_available", return_value="/models/medium"),
@@ -305,7 +283,6 @@ def test_cli_linux_cuda_error_no_windows_hint(tmp_path):
 
     with (
         patch("local_transcriber.cli.load_config", return_value={}),
-        patch("local_transcriber.cli.check_ffmpeg"),
         patch("local_transcriber.cli.validate_input_file", return_value=audio),
         patch("local_transcriber.cli.detect_device", return_value="cuda"),
         patch("local_transcriber.cli.ensure_model_available", return_value="/models/medium"),
@@ -330,7 +307,6 @@ def test_cli_device_fallback_warning(tmp_path):
 
     with (
         patch("local_transcriber.cli.load_config", return_value={}),
-        patch("local_transcriber.cli.check_ffmpeg"),
         patch("local_transcriber.cli.validate_input_file", return_value=audio),
         patch("local_transcriber.cli.detect_device", return_value="cuda"),
         patch("local_transcriber.cli.ensure_model_available", return_value="/models/medium"),
@@ -354,7 +330,6 @@ def test_cli_strict_device_passed_to_transcribe(tmp_path):
 
     with (
         patch("local_transcriber.cli.load_config", return_value={}),
-        patch("local_transcriber.cli.check_ffmpeg"),
         patch("local_transcriber.cli.validate_input_file", return_value=audio),
         patch("local_transcriber.cli.detect_device", return_value="cuda"),
         patch("local_transcriber.cli.ensure_model_available", return_value="/models/medium"),
@@ -374,7 +349,6 @@ def test_cli_strict_device_passed_to_transcribe(tmp_path):
 
     with (
         patch("local_transcriber.cli.load_config", return_value={}),
-        patch("local_transcriber.cli.check_ffmpeg"),
         patch("local_transcriber.cli.validate_input_file", return_value=audio),
         patch("local_transcriber.cli.detect_device", return_value="cpu"),
         patch("local_transcriber.cli.ensure_model_available", return_value="/models/medium"),
@@ -395,7 +369,6 @@ def test_cli_keyboard_interrupt(tmp_path):
 
     with (
         patch("local_transcriber.cli.load_config", return_value={}),
-        patch("local_transcriber.cli.check_ffmpeg"),
         patch("local_transcriber.cli.validate_input_file", return_value=audio),
         patch("local_transcriber.cli.detect_device", return_value="cpu"),
         patch("local_transcriber.cli.ensure_model_available", return_value="/models/medium"),
@@ -429,7 +402,6 @@ def test_cli_unexpected_error_verbose_traceback(tmp_path):
 
     with (
         patch("local_transcriber.cli.load_config", return_value={}),
-        patch("local_transcriber.cli.check_ffmpeg"),
         patch("local_transcriber.cli.validate_input_file", return_value=audio),
         patch("local_transcriber.cli.detect_device", return_value="cpu"),
         patch("local_transcriber.cli.ensure_model_available", return_value="/models/medium"),
@@ -451,7 +423,6 @@ def test_cli_unexpected_error_no_verbose_hint(tmp_path):
 
     with (
         patch("local_transcriber.cli.load_config", return_value={}),
-        patch("local_transcriber.cli.check_ffmpeg"),
         patch("local_transcriber.cli.validate_input_file", return_value=audio),
         patch("local_transcriber.cli.detect_device", return_value="cpu"),
         patch("local_transcriber.cli.ensure_model_available", return_value="/models/medium"),
@@ -481,7 +452,6 @@ def test_cli_batch_two_files(tmp_path):
 
     with (
         patch("local_transcriber.cli.load_config", return_value={}),
-        patch("local_transcriber.cli.check_ffmpeg"),
         patch("local_transcriber.cli.validate_input_file", side_effect=lambda p: p),
         patch("local_transcriber.cli.detect_device", return_value="cpu"),
         patch("local_transcriber.cli.ensure_model_available", return_value="/models/medium"),
@@ -509,7 +479,6 @@ def test_cli_batch_skips_existing(tmp_path):
 
     with (
         patch("local_transcriber.cli.load_config", return_value={}),
-        patch("local_transcriber.cli.check_ffmpeg"),
         patch("local_transcriber.cli.validate_input_file", side_effect=lambda p: p),
         patch("local_transcriber.cli.detect_device", return_value="cpu"),
         patch("local_transcriber.cli.ensure_model_available", return_value="/models/medium"),
@@ -537,7 +506,6 @@ def test_cli_batch_all_skipped_no_model_load(tmp_path):
 
     with (
         patch("local_transcriber.cli.load_config", return_value={}),
-        patch("local_transcriber.cli.check_ffmpeg"),
         patch("local_transcriber.cli.validate_input_file", side_effect=lambda p: p),
         patch("local_transcriber.cli.load_model", mock_load_model),
     ):
@@ -560,7 +528,6 @@ def test_cli_batch_force_overwrites(tmp_path):
 
     with (
         patch("local_transcriber.cli.load_config", return_value={}),
-        patch("local_transcriber.cli.check_ffmpeg"),
         patch("local_transcriber.cli.validate_input_file", side_effect=lambda p: p),
         patch("local_transcriber.cli.detect_device", return_value="cpu"),
         patch("local_transcriber.cli.ensure_model_available", return_value="/models/medium"),
@@ -595,7 +562,6 @@ def test_cli_batch_per_file_error(tmp_path):
 
     with (
         patch("local_transcriber.cli.load_config", return_value={}),
-        patch("local_transcriber.cli.check_ffmpeg"),
         patch("local_transcriber.cli.validate_input_file", side_effect=lambda p: p),
         patch("local_transcriber.cli.detect_device", return_value="cpu"),
         patch("local_transcriber.cli.ensure_model_available", return_value="/models/medium"),
@@ -627,7 +593,6 @@ def test_cli_batch_invalid_in_prescan(tmp_path):
 
     with (
         patch("local_transcriber.cli.load_config", return_value={}),
-        patch("local_transcriber.cli.check_ffmpeg"),
         patch("local_transcriber.cli.validate_input_file", side_effect=validate_side_effect),
         patch("local_transcriber.cli.detect_device", return_value="cpu"),
         patch("local_transcriber.cli.ensure_model_available", return_value="/models/medium"),
@@ -674,7 +639,6 @@ def test_cli_config_applied(tmp_path):
 
     with (
         patch("local_transcriber.cli.load_config", return_value={"model": "tiny"}),
-        patch("local_transcriber.cli.check_ffmpeg"),
         patch("local_transcriber.cli.validate_input_file", return_value=audio),
         patch("local_transcriber.cli.detect_device", return_value="cpu"),
         patch("local_transcriber.cli.ensure_model_available", return_value="/models/tiny") as mock_ensure,
@@ -696,7 +660,6 @@ def test_cli_cli_overrides_config(tmp_path):
 
     with (
         patch("local_transcriber.cli.load_config", return_value={"model": "tiny"}),
-        patch("local_transcriber.cli.check_ffmpeg"),
         patch("local_transcriber.cli.validate_input_file", return_value=audio),
         patch("local_transcriber.cli.detect_device", return_value="cpu"),
         patch("local_transcriber.cli.ensure_model_available", return_value="/models/small") as mock_ensure,
@@ -722,7 +685,6 @@ def test_cli_batch_fallback_warning(tmp_path):
 
     with (
         patch("local_transcriber.cli.load_config", return_value={}),
-        patch("local_transcriber.cli.check_ffmpeg"),
         patch("local_transcriber.cli.validate_input_file", side_effect=lambda p: p),
         patch("local_transcriber.cli.detect_device", return_value="cuda"),
         patch("local_transcriber.cli.ensure_model_available", return_value="/models/medium"),
@@ -750,7 +712,6 @@ def test_cli_batch_empty_speech_warning(tmp_path):
 
     with (
         patch("local_transcriber.cli.load_config", return_value={}),
-        patch("local_transcriber.cli.check_ffmpeg"),
         patch("local_transcriber.cli.validate_input_file", side_effect=lambda p: p),
         patch("local_transcriber.cli.detect_device", return_value="cpu"),
         patch("local_transcriber.cli.ensure_model_available", return_value="/models/medium"),
@@ -781,7 +742,6 @@ def test_cli_batch_midstream_fallback_warning(tmp_path):
 
     with (
         patch("local_transcriber.cli.load_config", return_value={}),
-        patch("local_transcriber.cli.check_ffmpeg"),
         patch("local_transcriber.cli.validate_input_file", side_effect=lambda p: p),
         patch("local_transcriber.cli.detect_device", return_value="cuda"),
         patch("local_transcriber.cli.ensure_model_available", return_value="/models/medium"),
@@ -808,7 +768,6 @@ def test_cli_batch_model_loaded_once(tmp_path):
 
     with (
         patch("local_transcriber.cli.load_config", return_value={}),
-        patch("local_transcriber.cli.check_ffmpeg"),
         patch("local_transcriber.cli.validate_input_file", side_effect=lambda p: p),
         patch("local_transcriber.cli.detect_device", return_value="cpu"),
         patch("local_transcriber.cli.ensure_model_available", return_value="/models/medium"),
