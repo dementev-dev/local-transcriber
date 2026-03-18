@@ -1,3 +1,4 @@
+import glob
 import shutil
 import subprocess
 import sys
@@ -68,3 +69,24 @@ def build_output_path(input_path: Path, output: Path | None = None) -> Path:
     if output is not None:
         return output
     return input_path.with_stem(input_path.stem + "-transcript").with_suffix(".md")
+
+
+def expand_globs(paths: list[Path]) -> list[Path]:
+    seen: set[Path] = set()
+    result: list[Path] = []
+    for p in paths:
+        s = str(p)
+        if any(c in s for c in ("*", "?", "[")):
+            candidates = [Path(m) for m in sorted(glob.glob(s))]
+        else:
+            candidates = [p]
+        for c in candidates:
+            resolved = c.resolve()
+            if resolved not in seen:
+                seen.add(resolved)
+                result.append(c)
+    return result
+
+
+def has_existing_transcript(input_path: Path) -> bool:
+    return build_output_path(input_path).exists()

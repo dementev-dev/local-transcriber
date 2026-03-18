@@ -52,19 +52,22 @@ class TranscribeResult:
     device_used: str  # "cpu" / "cuda"
 
 
-def transcribe(
-    file_path: Path,
-    model_name: str = "large-v3",
-    device: str = "auto",
-    compute_type: str = "int8",
-    language: str | None = None,
-    on_segment: Callable[[Segment], None] | None = None,
+@dataclass
+class TranscribeFileResult:
+    result: TranscribeResult
+    model: WhisperModel
+    actual_device: str
+
+
+def load_model(
+    model_name: str,
+    device: str,
+    compute_type: str,
     on_status: Callable[[str], None] | None = None,
     strict_device: bool = False,
-) -> TranscribeResult:
+) -> tuple[WhisperModel, str]:
+    """Загружает модель с CUDA-фолбеком. Возвращает (model, actual_device)."""
     actual_device = device
-    lang_arg = language if language and language != "auto" else None
-
     try:
         _notify_status(on_status, f"Инициализирую модель на {device}...")
         model = _create_model(model_name, device, compute_type)
@@ -82,6 +85,22 @@ def transcribe(
             model = _create_model(model_name, "cpu", compute_type)
         else:
             raise
+    return model, actual_device
+
+
+def _transcribe_file(
+    model: WhisperModel,
+    actual_device: str,
+    file_path: Path,
+    model_name: str,
+    compute_type: str,
+    language: str | None = None,
+    on_segment: Callable[[Segment], None] | None = None,
+    on_status: Callable[[str], None] | None = None,
+    strict_device: bool = False,
+) -> TranscribeFileResult:
+    """Транскрибирует один файл. При mid-stream CUDA fallback перезагружает модель."""
+    lang_arg = language if language and language != "auto" else None
 
     try:
         _notify_status(on_status, "Транскрибирую...")
@@ -103,13 +122,32 @@ def transcribe(
         else:
             raise
 
-    return TranscribeResult(
+    result = TranscribeResult(
         segments=segments,
         language=info.language,
         language_probability=info.language_probability,
         duration=info.duration,
         device_used=actual_device,
     )
+    return TranscribeFileResult(result=result, model=model, actual_device=actual_device)
+
+
+def transcribe(
+    file_path: Path,
+    model_name: str = "large-v3",
+    device: str = "auto",
+    compute_type: str = "int8",
+    language: str | None = None,
+    on_segment: Callable[[Segment], None] | None = None,
+    on_status: Callable[[str], None] | None = None,
+    strict_device: bool = False,
+) -> TranscribeResult:
+    model, actual_device = load_model(model_name, device, compute_type, on_status, strict_device)
+    tfr = _transcribe_file(
+        model, actual_device, file_path, model_name, compute_type,
+        language, on_segment, on_status, strict_device,
+    )
+    return tfr.result
 
 
 def ensure_model_available(

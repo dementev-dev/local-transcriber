@@ -1,0 +1,85 @@
+import sys
+import warnings
+from pathlib import Path
+
+if sys.version_info >= (3, 11):
+    import tomllib
+else:
+    import tomli as tomllib
+
+HARDCODED_DEFAULTS: dict[str, str] = {
+    "model": "large-v3",
+    "language": "auto",
+    "device": "auto",
+    "compute_type": "int8",
+}
+
+_VALID_KEYS = set(HARDCODED_DEFAULTS)
+_VALID_DEVICES = {"auto", "cpu", "cuda"}
+
+
+def find_config_file() -> Path | None:
+    cwd_config = Path.cwd() / ".transcriber.toml"
+    if cwd_config.is_file():
+        return cwd_config
+
+    global_config = Path.home() / ".config" / "transcriber" / "config.toml"
+    if global_config.is_file():
+        return global_config
+
+    return None
+
+
+def load_config(path: Path | None = None) -> dict[str, str]:
+    if path is None:
+        path = find_config_file()
+    if path is None:
+        return {}
+
+    try:
+        raw = path.read_bytes()
+        data = tomllib.loads(raw.decode("utf-8"))
+    except Exception as exc:
+        raise ValueError(f"Ошибка чтения конфига {path}: {exc}") from exc
+
+    unknown = set(data) - _VALID_KEYS
+    if unknown:
+        warnings.warn(
+            f"Неизвестные ключи в {path}: {', '.join(sorted(unknown))}",
+            stacklevel=2,
+        )
+
+    result: dict[str, str] = {}
+    for key in _VALID_KEYS:
+        if key not in data:
+            continue
+        value = data[key]
+        if not isinstance(value, str):
+            raise ValueError(
+                f"Значение '{key}' в {path} должно быть строкой, получено {type(value).__name__}"
+            )
+        if key == "device" and value not in _VALID_DEVICES:
+            raise ValueError(
+                f"Недопустимое значение device = '{value}' в {path}. "
+                f"Ожидается: {', '.join(sorted(_VALID_DEVICES))}"
+            )
+        if key == "language" and not value:
+            raise ValueError(f"Значение 'language' в {path} не может быть пустым")
+        result[key] = value
+
+    return result
+
+
+def resolve_defaults(
+    cli_values: dict[str, str | None], config: dict[str, str]
+) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for key in HARDCODED_DEFAULTS:
+        cli_val = cli_values.get(key)
+        if cli_val is not None:
+            result[key] = cli_val
+        elif key in config:
+            result[key] = config[key]
+        else:
+            result[key] = HARDCODED_DEFAULTS[key]
+    return result

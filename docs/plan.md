@@ -290,6 +290,69 @@
 
 ---
 
+## Шаг 8: Конфиг `.transcriber.toml`
+
+- [x] Зависимость `tomli` в `pyproject.toml` (для Python < 3.11)
+- [x] Новый файл `src/local_transcriber/config.py`:
+  - `HARDCODED_DEFAULTS` — дефолтные значения
+  - `find_config_file()` — ищет `.transcriber.toml` в CWD, потом `~/.config/transcriber/config.toml`
+  - `load_config()` — парсит TOML, валидирует ключи/значения
+  - `resolve_defaults()` — приоритет CLI > конфиг > хардкод
+- [x] Тесты `tests/test_config.py` — 11 тестов
+
+**Критерий готовности**: `uv run pytest tests/test_config.py -v` — все тесты зелёные.
+
+
+---
+
+## Шаг 9: Рефакторинг transcriber.py — выделить загрузку модели
+
+- [x] `load_model()` — загрузка модели с CUDA-фолбеком
+- [x] `_transcribe_file()` — транскрипция одного файла, возвращает `TranscribeFileResult`
+- [x] `TranscribeFileResult` — dataclass с result, model, actual_device
+- [x] `transcribe()` — тонкая обёртка для обратной совместимости
+- [x] Новые тесты: `test_load_model_cuda_fallback`, `test_load_model_strict_raises`, `test__transcribe_file_basic`
+
+**Критерий готовности**: все существующие тесты `test_transcriber.py` проходят без изменений.
+
+
+---
+
+## Шаг 10: Утилиты для батч-режима в utils.py
+
+- [x] `expand_globs()` — раскрытие glob-паттернов
+- [x] `has_existing_transcript()` — проверка существования транскрипта
+- [x] Тесты в `test_utils.py` — 5 новых тестов
+
+**Критерий готовности**: `uv run pytest tests/test_utils.py -v` — все тесты зелёные.
+
+
+---
+
+## Шаг 11: Батч-режим + конфиг в CLI
+
+- [x] Изменение сигнатуры CLI: `files: list[Path]`, дефолты `None`, `--force`
+- [x] Интеграция `load_config()` / `resolve_defaults()` в `main()`
+- [x] `_run_single()` — текущий flow для одного файла
+- [x] `_run_batch()` — prescan, загрузка модели, транскрипция с итогами
+- [x] Обновлённые тесты `test_cli.py` — 11 новых тестов
+
+**Критерий готовности**: `uv run pytest tests/test_cli.py -v` — все тесты зелёные.
+
+
+---
+
+## Шаг 12: Документация + ADR
+
+- [x] ADR-002: Batch mode и config (`docs/adr/002-batch-and-config.md`)
+- [x] README.md: секции «Батч-режим», «Конфигурационный файл», обновлена таблица опций CLI
+- [x] `docs/plan.md`: отмечены шаги 8–12
+
+**Критерий готовности**: README содержит документацию по батч-режиму и конфигу.
+
+
+---
+
 ## Инструкция для агента
 
 Команда на каждый шаг:

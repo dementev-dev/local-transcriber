@@ -5,7 +5,14 @@ from unittest.mock import MagicMock, patch
 import pytest
 from huggingface_hub.errors import LocalEntryNotFoundError
 
-from local_transcriber.transcriber import Segment, TranscribeResult, ensure_model_available, transcribe
+from local_transcriber.transcriber import (
+    Segment,
+    TranscribeResult,
+    _transcribe_file,
+    ensure_model_available,
+    load_model,
+    transcribe,
+)
 
 
 def _make_raw_segments(count: int) -> list:
@@ -414,3 +421,53 @@ def test_transcribe_strict_cuda_error_during_transcription(mock_model_cls):
             device="cuda",
             strict_device=True,
         )
+
+
+# === load_model tests ===
+
+
+@patch("local_transcriber.transcriber.WhisperModel")
+def test_load_model_cuda_fallback(mock_model_cls):
+    cpu_instance = MagicMock()
+
+    def model_side_effect(model_name, device, compute_type):
+        if device == "cuda":
+            raise RuntimeError("CUDA out of memory")
+        return cpu_instance
+
+    mock_model_cls.side_effect = model_side_effect
+
+    with pytest.warns(UserWarning, match="Переключение на CPU"):
+        model, actual_device = load_model("tiny", "cuda", "int8")
+
+    assert actual_device == "cpu"
+    assert model is cpu_instance
+
+
+@patch("local_transcriber.transcriber.WhisperModel")
+def test_load_model_strict_raises(mock_model_cls):
+    mock_model_cls.side_effect = RuntimeError("CUDA out of memory")
+
+    with pytest.raises(RuntimeError, match="CUDA out of memory"):
+        load_model("tiny", "cuda", "int8", strict_device=True)
+
+
+@patch("local_transcriber.transcriber.WhisperModel")
+def test__transcribe_file_basic(mock_model_cls):
+    raw_segments = _make_raw_segments(2)
+    info = _make_info()
+
+    instance = MagicMock()
+    instance.transcribe.return_value = (iter(raw_segments), info)
+
+    tfr = _transcribe_file(
+        model=instance,
+        actual_device="cpu",
+        file_path=Path("test.mp3"),
+        model_name="tiny",
+        compute_type="int8",
+    )
+
+    assert len(tfr.result.segments) == 2
+    assert tfr.actual_device == "cpu"
+    assert tfr.model is instance

@@ -7,7 +7,9 @@ import pytest
 from local_transcriber.utils import (
     build_output_path,
     detect_device,
+    expand_globs,
     get_gpu_name,
+    has_existing_transcript,
     validate_input_file,
 )
 
@@ -82,3 +84,45 @@ def test_get_gpu_name_success():
     with patch("subprocess.run", return_value=mock_result):
         result = get_gpu_name()
     assert result == "NVIDIA GeForce RTX 3060"
+
+
+def test_expand_globs_no_patterns(tmp_path):
+    a = tmp_path / "a.mp3"
+    b = tmp_path / "b.mp3"
+    result = expand_globs([a, b])
+    assert result == [a, b]
+
+
+def test_expand_globs_with_star(tmp_path):
+    (tmp_path / "x.mp3").write_bytes(b"fake")
+    (tmp_path / "y.mp3").write_bytes(b"fake")
+    (tmp_path / "z.txt").write_bytes(b"fake")
+    result = expand_globs([Path(str(tmp_path / "*.mp3"))])
+    assert len(result) == 2
+    assert all(p.suffix == ".mp3" for p in result)
+
+
+def test_expand_globs_no_match(tmp_path):
+    result = expand_globs([Path(str(tmp_path / "*.wav"))])
+    assert result == []
+
+
+def test_expand_globs_deduplicates(tmp_path):
+    f = tmp_path / "a.mp3"
+    f.write_bytes(b"fake")
+    result = expand_globs([f, Path(str(tmp_path / "*.mp3"))])
+    assert len(result) == 1
+
+
+def test_has_existing_transcript_true(tmp_path):
+    audio = tmp_path / "meeting.mp3"
+    audio.write_bytes(b"fake")
+    transcript = tmp_path / "meeting-transcript.md"
+    transcript.write_text("content")
+    assert has_existing_transcript(audio) is True
+
+
+def test_has_existing_transcript_false(tmp_path):
+    audio = tmp_path / "meeting.mp3"
+    audio.write_bytes(b"fake")
+    assert has_existing_transcript(audio) is False

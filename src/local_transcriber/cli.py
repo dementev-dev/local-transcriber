@@ -6,9 +6,25 @@ import typer
 from rich.console import Console
 from rich.status import Status
 
+from .config import load_config, resolve_defaults
 from .formatter import format_transcript, write_transcript
-from .transcriber import Segment, _is_cuda_error, ensure_model_available, transcribe
-from .utils import build_output_path, check_ffmpeg, detect_device, get_gpu_name, validate_input_file
+from .transcriber import (
+    Segment,
+    _is_cuda_error,
+    _transcribe_file,
+    ensure_model_available,
+    load_model,
+    transcribe,
+)
+from .utils import (
+    build_output_path,
+    check_ffmpeg,
+    detect_device,
+    expand_globs,
+    get_gpu_name,
+    has_existing_transcript,
+    validate_input_file,
+)
 
 app = typer.Typer()
 console = Console(stderr=True)
@@ -16,22 +32,53 @@ console = Console(stderr=True)
 
 @app.command()
 def main(
-    file: Path = typer.Argument(..., help="Путь к аудио- или видеофайлу"),
-    model: str = typer.Option("large-v3", "--model", "-m", help="Модель Whisper"),
-    language: str = typer.Option("auto", "--language", "-l", help="Язык (ru|en|auto)"),
+    files: list[Path] = typer.Argument(..., help="Пути к аудио/видеофайлам"),
+    model: str | None = typer.Option(
+        None, "--model", "-m", show_default=False, help="Модель Whisper [по умолч.: large-v3]"
+    ),
+    language: str | None = typer.Option(
+        None, "--language", "-l", show_default=False, help="Язык (ru|en|auto) [по умолч.: auto]"
+    ),
     output: Path | None = typer.Option(None, "--output", "-o", help="Путь к выходному файлу"),
-    device: str = typer.Option("auto", "--device", "-d", help="Устройство (auto|cpu|cuda)"),
-    compute_type: str = typer.Option("int8", "--compute-type", help="Тип вычислений"),
+    device: str | None = typer.Option(
+        None, "--device", "-d", show_default=False, help="Устройство (auto|cpu|cuda) [по умолч.: auto]"
+    ),
+    compute_type: str | None = typer.Option(
+        None, "--compute-type", show_default=False, help="Тип вычислений [по умолч.: int8]"
+    ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Подробный вывод"),
+    force: bool = typer.Option(False, "--force", "-f", help="Перезаписать существующие транскрипты"),
 ) -> None:
     try:
-        _run(file, model, language, output, device, compute_type, verbose)
+        config = load_config()
+        defaults = resolve_defaults(
+            {"model": model, "language": language, "device": device, "compute_type": compute_type},
+            config,
+        )
+
+        expanded = expand_globs(files)
+        if not expanded:
+            console.print("Файлы не найдены.", style="red bold")
+            raise SystemExit(1)
+
+        is_batch = len(expanded) > 1
+        if is_batch and output is not None:
+            console.print("--output несовместим с несколькими файлами.", style="red bold")
+            raise SystemExit(1)
+
+        if is_batch:
+            _run_batch(expanded, defaults, verbose, force)
+        else:
+            _run_single(expanded[0], defaults, output, verbose)
     except KeyboardInterrupt:
         console.print("\nПрервано пользователем.", style="yellow")
         raise SystemExit(130)
     except SystemExit:
         raise
-    except (FileNotFoundError, ValueError) as exc:
+    except ValueError as exc:
+        console.print(f"Ошибка: {exc}", style="red bold")
+        raise SystemExit(1)
+    except (FileNotFoundError,) as exc:
         console.print(f"Ошибка: {exc}", style="red bold")
         raise SystemExit(1)
     except Exception as exc:
@@ -54,59 +101,72 @@ def main(
         raise SystemExit(1)
 
 
-def _run(
+def _run_single(
     file: Path,
-    model: str,
-    language: str,
+    defaults: dict[str, str],
     output: Path | None,
-    device: str,
-    compute_type: str,
     verbose: bool,
 ) -> None:
     start = time.monotonic()
 
     check_ffmpeg()
     validated_file = validate_input_file(file)
-    requested_device = device
-    resolved_device = detect_device(device)
+    requested_device = defaults["device"]
+    resolved_device = detect_device(requested_device)
     strict = requested_device != "auto"
     output_path = build_output_path(validated_file, output)
 
     console.print(f"Файл: [bold]{validated_file.name}[/bold]")
-    console.print(f"Модель: [bold]{model}[/bold]  Устройство: [bold]{resolved_device}[/bold]  Compute: [bold]{compute_type}[/bold]")
+    console.print(
+        f"Модель: [bold]{defaults['model']}[/bold]  "
+        f"Устройство: [bold]{resolved_device}[/bold]  "
+        f"Compute: [bold]{defaults['compute_type']}[/bold]"
+    )
 
-    model_path = ensure_model_available(model, on_status=lambda message: console.print(message))
+    model_path = ensure_model_available(
+        defaults["model"], on_status=lambda message: console.print(message)
+    )
 
     def on_segment(seg: Segment) -> None:
         console.print(f"  [{seg.start:.2f}s] {seg.text.strip()}")
 
+    model_obj, actual_device = load_model(
+        model_path, resolved_device, defaults["compute_type"],
+        on_status=lambda msg: console.print(msg), strict_device=strict,
+    )
+
     with Status("Подготавливаю запуск...", console=console) as status:
-        result = transcribe(
+        tfr = _transcribe_file(
+            model=model_obj,
+            actual_device=actual_device,
             file_path=validated_file,
             model_name=model_path,
-            device=resolved_device,
-            compute_type=compute_type,
-            language=language if language != "auto" else None,
+            compute_type=defaults["compute_type"],
+            language=defaults["language"] if defaults["language"] != "auto" else None,
             on_segment=on_segment if verbose else None,
             on_status=status.update,
             strict_device=strict,
         )
 
-    if result.device_used != resolved_device:
+    result = tfr.result
+
+    if tfr.actual_device != resolved_device:
         if requested_device == "auto":
             console.print(
                 f"Определено устройство {resolved_device}, "
-                f"но использовано {result.device_used} (fallback)",
+                f"но использовано {tfr.actual_device} (fallback)",
                 style="yellow",
             )
         else:
             console.print(
-                f"Запрошено {requested_device}, использовано {result.device_used}",
+                f"Запрошено {requested_device}, использовано {tfr.actual_device}",
                 style="yellow",
             )
 
     if len(result.segments) == 0:
-        console.print(f"Речь не обнаружена в файле {validated_file.name}", style="yellow")
+        console.print(
+            f"Речь не обнаружена в файле {validated_file.name}", style="yellow"
+        )
 
     if result.device_used == "cuda":
         gpu_name = get_gpu_name()
@@ -114,12 +174,12 @@ def _run(
     else:
         device_info = "CPU"
 
-    language_mode = "detected" if language == "auto" else "forced"
+    language_mode = "detected" if defaults["language"] == "auto" else "forced"
 
     content = format_transcript(
         result=result,
         source_filename=validated_file.name,
-        model_name=model,
+        model_name=defaults["model"],
         device_info=device_info,
         language_mode=language_mode,
     )
@@ -128,6 +188,149 @@ def _run(
     elapsed = time.monotonic() - start
     console.print(f"Транскрипт сохранён: [bold]{output_path}[/bold]", style="green")
     console.print(f"  Сегментов: {len(result.segments)}  Время: {elapsed:.1f}с")
+
+
+def _run_batch(
+    files: list[Path],
+    defaults: dict[str, str],
+    verbose: bool,
+    force: bool,
+) -> None:
+    check_ffmpeg()
+
+    # Phase 1: Prescan
+    to_process: list[Path] = []
+    skipped = 0
+    invalid = 0
+    for file in files:
+        try:
+            validated = validate_input_file(file)
+        except (FileNotFoundError, ValueError) as exc:
+            console.print(f"  Ошибка: {file.name}: {exc}", style="red")
+            invalid += 1
+            continue
+        if not force and has_existing_transcript(validated):
+            console.print(
+                f"  Пропуск: {file.name} (транскрипт существует)", style="dim"
+            )
+            skipped += 1
+            continue
+        to_process.append(validated)
+
+    if not to_process:
+        console.print(
+            f"\nИтого: 0 обработано, {skipped} пропущено, {invalid} ошибок"
+        )
+        if invalid > 0:
+            raise SystemExit(1)
+        return
+
+    # Phase 2: Load model
+    requested_device = defaults["device"]
+    resolved_device = detect_device(requested_device)
+    strict = requested_device != "auto"
+    model_path = ensure_model_available(
+        defaults["model"], on_status=lambda msg: console.print(msg)
+    )
+    model_obj, actual_device = load_model(
+        model_path, resolved_device, defaults["compute_type"],
+        on_status=lambda msg: console.print(msg), strict_device=strict,
+    )
+
+    if actual_device != resolved_device:
+        if requested_device == "auto":
+            console.print(
+                f"Определено устройство {resolved_device}, "
+                f"но используется {actual_device} (fallback)",
+                style="yellow",
+            )
+        else:
+            console.print(
+                f"Запрошено {requested_device}, используется {actual_device}",
+                style="yellow",
+            )
+
+    # Phase 3: Transcribe
+    processed = 0
+    failed = 0
+    language_mode = "detected" if defaults["language"] == "auto" else "forced"
+
+    batch_start = time.monotonic()
+
+    for i, file in enumerate(to_process, 1):
+        try:
+            prefix = f"[{i}/{len(to_process)}] {file.name}"
+            console.print(f"{prefix}", style="bold")
+            file_start = time.monotonic()
+
+            def on_segment(seg: Segment) -> None:
+                console.print(f"  [{seg.start:.2f}s] {seg.text.strip()}")
+
+            with Status(f"{prefix}...", console=console) as status:
+                tfr = _transcribe_file(
+                    model=model_obj,
+                    actual_device=actual_device,
+                    file_path=file,
+                    model_name=model_path,
+                    compute_type=defaults["compute_type"],
+                    language=defaults["language"] if defaults["language"] != "auto" else None,
+                    on_segment=on_segment if verbose else None,
+                    on_status=status.update if not verbose else lambda msg: console.print(msg),
+                    strict_device=strict,
+                )
+
+            if tfr.actual_device != actual_device:
+                console.print(
+                    f"  {file.name}: fallback на {tfr.actual_device} при транскрипции",
+                    style="yellow",
+                )
+            model_obj, actual_device = tfr.model, tfr.actual_device
+
+            result = tfr.result
+
+            if len(result.segments) == 0:
+                console.print(
+                    f"  Речь не обнаружена: {file.name}", style="yellow"
+                )
+
+            if result.device_used == "cuda":
+                gpu_name = get_gpu_name()
+                device_info = f"CUDA ({gpu_name or 'Unknown GPU'})"
+            else:
+                device_info = "CPU"
+
+            content = format_transcript(
+                result=result,
+                source_filename=file.name,
+                model_name=defaults["model"],
+                device_info=device_info,
+                language_mode=language_mode,
+            )
+            write_transcript(content, build_output_path(file))
+            file_elapsed = time.monotonic() - file_start
+            console.print(
+                f"  Готово: {file.name}  "
+                f"Сегментов: {len(result.segments)}  Время: {file_elapsed:.1f}с",
+                style="green",
+            )
+            processed += 1
+        except KeyboardInterrupt:
+            raise
+        except Exception as exc:
+            if verbose:
+                console.print_exception()
+            else:
+                console.print(f"  Ошибка: {file.name}: {exc}", style="red")
+            failed += 1
+
+    total_failed = invalid + failed
+    batch_elapsed = time.monotonic() - batch_start
+    console.print(
+        f"\nИтого: {processed} обработано, {skipped} пропущено, {total_failed} ошибок"
+        f"  Время: {batch_elapsed:.1f}с"
+    )
+    if total_failed > 0:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":
