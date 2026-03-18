@@ -1,3 +1,5 @@
+"""Формирование markdown-транскрипта из результатов распознавания."""
+
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -42,6 +44,10 @@ def _group_segments(segments: list[Segment]) -> list[_Paragraph]:
 
 
 def format_timestamp(seconds: float, use_hours: bool = False) -> str:
+    """Форматирует время в ``MM:SS.cc`` или ``HH:MM:SS.cc``.
+
+    Сотые доли (centiseconds) — максимальная точность, которую даёт Whisper.
+    """
     total_cs = round(seconds * 100)
     centiseconds = total_cs % 100
     total_seconds = total_cs // 100
@@ -58,6 +64,7 @@ def format_timestamp(seconds: float, use_hours: bool = False) -> str:
 
 
 def _format_duration(seconds: float) -> str:
+    """Человекочитаемая длительность для метаданных в шапке транскрипта."""
     total = int(seconds)
     h = total // 3600
     m = (total % 3600) // 60
@@ -75,6 +82,7 @@ def format_transcript(
     language_mode: str,  # "detected" | "forced"
     transcription_date: datetime | None = None,  # None -> datetime.now()
 ) -> str:
+    """Собирает markdown-транскрипт: шапка с метаданными + абзацы с таймкодами."""
     date = transcription_date or datetime.now()
     use_hours = result.duration > 3600
 
@@ -104,5 +112,6 @@ def format_transcript(
 
 
 def write_transcript(content: str, output_path: Path) -> None:
+    """Записывает готовый транскрипт в файл."""
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(content)

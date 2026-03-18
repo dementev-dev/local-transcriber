@@ -1,3 +1,5 @@
+"""Обёртка над faster-whisper: загрузка моделей, транскрипция, CUDA fallback."""
+
 import warnings
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -20,6 +22,8 @@ MODEL_REPOS = {
     "large-v3": "Systran/faster-whisper-large-v3",
 }
 
+# allow — фильтр для snapshot_download (какие файлы скачивать из репозитория);
+# required — для валидации (что обязано быть после скачивания/в локальной модели)
 MODEL_ALLOW_PATTERNS = [
     "config.json",
     "preprocessor_config.json",
@@ -71,6 +75,7 @@ def load_model(
         _notify_status(on_status, f"Инициализирую модель на {device}...")
         model = _create_model(model_name, device, compute_type)
     except (RuntimeError, ValueError) as exc:
+        # strict — пользователь явно указал устройство, fallback запрещён
         if device != "cpu" and _is_cuda_error(exc):
             if strict_device:
                 raise
@@ -105,6 +110,8 @@ def _transcribe_file(
         _notify_status(on_status, "Транскрибирую...")
         segments, info = _run_transcription(model, file_path, lang_arg, on_segment, on_status)
     except (RuntimeError, ValueError) as exc:
+        # Mid-stream fallback: GPU может упасть с OOM уже во время транскрипции,
+        # поэтому перезагружаем модель на CPU и начинаем сначала
         if actual_device != "cpu" and _is_cuda_error(exc):
             if strict_device:
                 raise
@@ -141,6 +148,7 @@ def transcribe(
     on_status: Callable[[str], None] | None = None,
     strict_device: bool = False,
 ) -> TranscribeResult:
+    """High-level API: загрузка модели + транскрипция за один вызов."""
     model, actual_device = load_model(model_name, device, compute_type, on_status, strict_device)
     tfr = _transcribe_file(
         model, actual_device, file_path, model_name, compute_type,
@@ -153,6 +161,11 @@ def ensure_model_available(
     model_name: str,
     on_status: Callable[[str], None] | None = None,
 ) -> str:
+    """Резолвит alias модели в repo_id и гарантирует наличие файлов.
+
+    Стратегия: cache-first (``local_files_only=True``), затем download.
+    Два вызова ``snapshot_download`` — чтобы не лезть в сеть, если модель уже в кэше.
+    """
     local_path = Path(model_name).expanduser()
     if local_path.is_dir():
         _validate_model_dir(local_path)
@@ -198,6 +211,9 @@ def _create_model(model_name: str, device: str, compute_type: str):
     try:
         return WhisperModel(model_name, device=device, compute_type=compute_type)
     except ImportError as exc:
+        # WhisperModel при инициализации может загружать файлы через HF Hub;
+        # если в системе настроен SOCKS proxy, но socksio не установлен,
+        # HF Hub бросает ImportError — оборачиваем в понятное сообщение
         if _is_missing_socksio_error(exc):
             raise RuntimeError(
                 "Обнаружен SOCKS proxy, но не установлена зависимость `socksio`, "

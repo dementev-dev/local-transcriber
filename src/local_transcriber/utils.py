@@ -1,3 +1,5 @@
+"""Утилиты для валидации входных файлов, определения устройства и работы с путями."""
+
 import glob
 import shutil
 import subprocess
@@ -11,6 +13,11 @@ SUPPORTED_EXTENSIONS = {
 
 
 def detect_device(requested: str = "auto") -> str:
+    """Определяет устройство для вычислений.
+
+    При ``requested="auto"`` проверяет наличие ``nvidia-smi`` в PATH
+    и возвращает ``"cuda"`` или ``"cpu"``. Явное значение возвращается как есть.
+    """
     if requested != "auto":
         return requested
     if shutil.which("nvidia-smi") is not None:
@@ -19,6 +26,7 @@ def detect_device(requested: str = "auto") -> str:
 
 
 def get_gpu_name() -> str | None:
+    """Возвращает название GPU через ``nvidia-smi`` (для метаданных транскрипта)."""
     try:
         result = subprocess.run(
             ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
@@ -37,6 +45,12 @@ def get_gpu_name() -> str | None:
 
 
 def validate_input_file(path: Path) -> Path:
+    """Проверяет существование, непустоту и расширение файла.
+
+    Неизвестное расширение — предупреждение, а не ошибка: файл может оказаться
+    корректным контейнером, просто с нестандартным суффиксом.
+    Возвращает resolved-путь.
+    """
     if not path.exists():
         raise FileNotFoundError(f"Файл не найден: {path}")
     if not path.is_file():
@@ -53,12 +67,18 @@ def validate_input_file(path: Path) -> Path:
 
 
 def build_output_path(input_path: Path, output: Path | None = None) -> Path:
+    """Строит путь выходного файла: ``<имя>-transcript.md`` рядом с исходным."""
     if output is not None:
         return output
     return input_path.with_stem(input_path.stem + "-transcript").with_suffix(".md")
 
 
 def expand_globs(paths: list[Path]) -> list[Path]:
+    """Раскрывает glob-паттерны в списке путей с дедупликацией.
+
+    Typer на Windows не раскрывает ``*.mp4`` самостоятельно,
+    поэтому глобы обрабатываются вручную. Дедупликация — по resolved-пути.
+    """
     seen: set[Path] = set()
     result: list[Path] = []
     for p in paths:
@@ -76,4 +96,5 @@ def expand_globs(paths: list[Path]) -> list[Path]:
 
 
 def has_existing_transcript(input_path: Path) -> bool:
+    """Проверяет наличие транскрипта для skip-логики батч-режима."""
     return build_output_path(input_path).exists()

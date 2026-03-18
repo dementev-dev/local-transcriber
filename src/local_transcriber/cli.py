@@ -1,3 +1,5 @@
+"""CLI-точка входа (typer). Single и batch режимы транскрипции."""
+
 import sys
 import time
 from pathlib import Path
@@ -49,6 +51,10 @@ def main(
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Подробный вывод"),
     force: bool = typer.Option(False, "--force", "-f", help="Перезаписать существующие транскрипты"),
 ) -> None:
+    """Транскрибирует аудио/видеофайлы в markdown с таймкодами.
+
+    Каскад приоритетов параметров: CLI-флаги > .transcriber.toml > device-aware дефолты.
+    """
     try:
         config = load_config()
         cli_values = {"model": model, "language": language, "device": device, "compute_type": compute_type}
@@ -108,11 +114,13 @@ def _run_single(
     output: Path | None,
     verbose: bool,
 ) -> None:
+    """Пайплайн одного файла: валидация → модель → транскрипция → запись."""
     start = time.monotonic()
 
     validated_file = validate_input_file(file)
     requested_device = defaults["device"]
     resolved_device = detect_device(requested_device)
+    # Если пользователь явно указал устройство — запрещаем fallback на CPU
     strict = requested_device != "auto"
     output_path = build_output_path(validated_file, output)
 
@@ -196,7 +204,8 @@ def _run_batch(
     verbose: bool,
     force: bool,
 ) -> None:
-    # Phase 1: Prescan
+    """Трёхфазный батч-пайплайн: prescan → загрузка модели → транскрипция."""
+    # Phase 1: Prescan — fail-fast + skip до загрузки модели (экономим ~2-5 сек)
     to_process: list[Path] = []
     skipped = 0
     invalid = 0
@@ -282,6 +291,7 @@ def _run_batch(
                     f"  {file.name}: fallback на {tfr.actual_device} при транскрипции",
                     style="yellow",
                 )
+            # Обновляем после возможного mid-stream fallback на CPU
             model_obj, actual_device = tfr.model, tfr.actual_device
 
             result = tfr.result

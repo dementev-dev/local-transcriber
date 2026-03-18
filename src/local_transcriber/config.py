@@ -1,3 +1,5 @@
+"""Загрузка конфигурации из ``.transcriber.toml`` и каскад приоритетов."""
+
 import sys
 import warnings
 from pathlib import Path
@@ -19,11 +21,13 @@ DEVICE_DEFAULTS: dict[str, dict[str, str]] = {
     "cpu": {"model": "medium", "compute_type": "float32"},
 }
 
+# Одно место правды для допустимых ключей конфига
 _VALID_KEYS = set(HARDCODED_DEFAULTS)
 _VALID_DEVICES = {"auto", "cpu", "cuda"}
 
 
 def find_config_file() -> Path | None:
+    """Ищет конфиг: сначала ``.transcriber.toml`` в cwd, затем ``~/.config/transcriber/config.toml``."""
     cwd_config = Path.cwd() / ".transcriber.toml"
     if cwd_config.is_file():
         return cwd_config
@@ -36,6 +40,11 @@ def find_config_file() -> Path | None:
 
 
 def load_config(path: Path | None = None) -> dict[str, str]:
+    """Загружает и валидирует TOML-конфиг.
+
+    Неизвестные ключи вызывают предупреждение (а не ошибку) для forward
+    compatibility: новые версии могут добавить ключи, которых ещё нет в текущей.
+    """
     if path is None:
         path = find_config_file()
     if path is None:
@@ -78,6 +87,7 @@ def load_config(path: Path | None = None) -> dict[str, str]:
 def resolve_defaults(
     cli_values: dict[str, str | None], config: dict[str, str]
 ) -> dict[str, str]:
+    """Каскад приоритетов: CLI > конфиг-файл > hardcoded-дефолты."""
     result: dict[str, str] = {}
     for key in HARDCODED_DEFAULTS:
         cli_val = cli_values.get(key)
