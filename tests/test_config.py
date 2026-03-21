@@ -128,3 +128,18 @@ def test_apply_device_defaults_config_overrides():
     result = apply_device_defaults(defaults, "cuda", cli, config)
     assert result["model"] == "small"
     assert result["compute_type"] == "int8"
+
+
+def test_load_config_openvino_device(tmp_path):
+    config = tmp_path / "config.toml"
+    config.write_text('device = "openvino"\n')
+    result = load_config(config)
+    assert result == {"device": "openvino"}
+
+
+def test_apply_device_defaults_openvino():
+    defaults = {"model": "medium", "language": "ru", "device": "auto", "compute_type": "float32"}
+    cli = {"model": None, "language": None, "device": None, "compute_type": None}
+    result = apply_device_defaults(defaults, "openvino", cli, {})
+    assert result["model"] == "medium"
+    assert result["compute_type"] == "int8"

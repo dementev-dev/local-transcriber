@@ -51,7 +51,7 @@ def main(
     output: Path | None = typer.Option(None, "--output", "-o", help="Путь к выходному файлу"),
     device: str | None = typer.Option(
         None, "--device", "-d", show_default=False,
-        help="Устройство (auto|cpu|cuda) [по умолч.: auto]"
+        help="Устройство (auto|cpu|cuda|openvino) [по умолч.: auto]"
     ),
     compute_type: str | None = typer.Option(
         None, "--compute-type", show_default=False,

@@ -1,6 +1,7 @@
 """Утилиты для валидации входных файлов, определения устройства и работы с путями."""
 
 import glob
+import platform
 import shutil
 import subprocess
 import warnings
@@ -15,14 +16,28 @@ SUPPORTED_EXTENSIONS = {
 def detect_device(requested: str = "auto") -> str:
     """Определяет устройство для вычислений.
 
-    При ``requested="auto"`` проверяет наличие ``nvidia-smi`` в PATH
-    и возвращает ``"cuda"`` или ``"cpu"``. Явное значение возвращается как есть.
+    При ``requested="auto"`` проверяет: CUDA → OpenVINO → CPU.
+    Явное значение возвращается как есть.
     """
     if requested != "auto":
         return requested
     if shutil.which("nvidia-smi") is not None:
         return "cuda"
+    if _is_openvino_available():
+        return "openvino"
     return "cpu"
+
+
+def _is_openvino_available() -> bool:
+    """Проверяет доступность OpenVINO: x86/AMD64 архитектура + пакет установлен."""
+    if platform.machine().lower() not in {"x86_64", "amd64"}:
+        return False
+    try:
+        import openvino_genai  # noqa: F401
+
+        return True
+    except ImportError:
+        return False
 
 
 def get_gpu_name() -> str | None:

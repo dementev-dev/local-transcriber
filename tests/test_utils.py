@@ -58,6 +58,34 @@ def test_build_output_path_custom():
 def test_detect_device_explicit():
     assert detect_device("cpu") == "cpu"
     assert detect_device("cuda") == "cuda"
+    assert detect_device("openvino") == "openvino"
+
+
+def test_detect_device_auto_openvino():
+    """Нет nvidia-smi, есть openvino_genai, x86_64 → openvino."""
+    with (
+        patch("local_transcriber.utils.shutil.which", return_value=None),
+        patch("local_transcriber.utils._is_openvino_available", return_value=True),
+    ):
+        assert detect_device("auto") == "openvino"
+
+
+def test_detect_device_cuda_over_openvino():
+    """nvidia-smi доступен и openvino тоже → cuda побеждает."""
+    with (
+        patch("local_transcriber.utils.shutil.which", return_value="/usr/bin/nvidia-smi"),
+        patch("local_transcriber.utils._is_openvino_available", return_value=True),
+    ):
+        assert detect_device("auto") == "cuda"
+
+
+def test_detect_device_auto_cpu_fallback():
+    """Ни nvidia-smi, ни openvino → cpu."""
+    with (
+        patch("local_transcriber.utils.shutil.which", return_value=None),
+        patch("local_transcriber.utils._is_openvino_available", return_value=False),
+    ):
+        assert detect_device("auto") == "cpu"
 
 
 def test_get_gpu_name_no_nvidia_smi():

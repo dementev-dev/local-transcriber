@@ -19,11 +19,12 @@ HARDCODED_DEFAULTS: dict[str, str] = {
 DEVICE_DEFAULTS: dict[str, dict[str, str]] = {
     "cuda": {"model": "medium", "compute_type": "float16"},
     "cpu": {"model": "medium", "compute_type": "float32"},
+    "openvino": {"model": "medium", "compute_type": "int8"},
 }
 
 # Одно место правды для допустимых ключей конфига
 _VALID_KEYS = set(HARDCODED_DEFAULTS)
-_VALID_DEVICES = {"auto", "cpu", "cuda"}
+_VALID_DEVICES = {"auto", "cpu", "cuda", "openvino"}
 
 
 def find_config_file() -> Path | None:
