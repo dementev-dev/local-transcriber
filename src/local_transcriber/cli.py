@@ -72,6 +72,8 @@ def main(
         resolved_device = detect_device(defaults["device"])
         defaults = apply_device_defaults(defaults, resolved_device, cli_values, config)
 
+        ct_explicit = compute_type is not None
+
         expanded = expand_globs(files)
         if not expanded:
             console.print("Файлы не найдены.", style="red bold")
@@ -83,9 +85,9 @@ def main(
             raise SystemExit(1)
 
         if is_batch:
-            _run_batch(expanded, defaults, verbose, force)
+            _run_batch(expanded, defaults, verbose, force, ct_explicit)
         else:
-            _run_single(expanded[0], defaults, output, verbose)
+            _run_single(expanded[0], defaults, output, verbose, ct_explicit)
     except KeyboardInterrupt:
         console.print("\nПрервано пользователем.", style="yellow")
         raise SystemExit(130)
@@ -122,6 +124,7 @@ def _run_single(
     defaults: dict[str, str],
     output: Path | None,
     verbose: bool,
+    compute_type_explicit: bool = False,
 ) -> None:
     """Пайплайн одного файла: валидация → модель → транскрипция → запись."""
     start = time.monotonic()
@@ -145,6 +148,7 @@ def _run_single(
     model_obj, actual_device, backend, model_path = load_model(
         defaults["model"], resolved_device, defaults["compute_type"],
         on_status=lambda msg: console.print(msg), strict_device=strict,
+        compute_type_explicit=compute_type_explicit,
     )
 
     with Status("Подготавливаю запуск...", console=console) as status:
@@ -204,6 +208,7 @@ def _run_batch(
     defaults: dict[str, str],
     verbose: bool,
     force: bool,
+    compute_type_explicit: bool = False,
 ) -> None:
     """Трёхфазный батч-пайплайн: prescan → загрузка модели → транскрипция."""
     # Phase 1: Prescan — fail-fast + skip до загрузки модели (экономим ~2-5 сек)
@@ -240,6 +245,7 @@ def _run_batch(
     model_obj, actual_device, backend, model_path = load_model(
         defaults["model"], resolved_device, defaults["compute_type"],
         on_status=lambda msg: console.print(msg), strict_device=strict,
+        compute_type_explicit=compute_type_explicit,
     )
 
     if actual_device != resolved_device:

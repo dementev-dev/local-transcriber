@@ -124,7 +124,7 @@ def test_transcribe_cuda_fallback(mock_get_backend):
         model_path="/mock/cpu/model",
     )
 
-    def backend_for_device(device):
+    def backend_for_device(device, **kwargs):
         return cuda_backend if device == "cuda" else cpu_backend
 
     mock_get_backend.side_effect = backend_for_device
@@ -168,7 +168,7 @@ def test_transcribe_cuda_fallback_on_transcribe_call(mock_get_backend):
         model_path="/mock/cpu/model",
     )
 
-    def backend_for_device(device):
+    def backend_for_device(device, **kwargs):
         return cuda_backend if device == "cuda" else cpu_backend
 
     mock_get_backend.side_effect = backend_for_device
@@ -245,7 +245,7 @@ def test_transcribe_non_strict_cuda_fallback(mock_get_backend):
         model_path="/mock/cpu/model",
     )
 
-    def backend_for_device(device):
+    def backend_for_device(device, **kwargs):
         return cuda_backend if device == "cuda" else cpu_backend
 
     mock_get_backend.side_effect = backend_for_device
@@ -288,7 +288,7 @@ def test_load_model_cuda_fallback(mock_get_backend):
     cpu_model = MagicMock()
     cpu_backend = _make_backend(model=cpu_model, model_path="/mock/cpu/model")
 
-    def backend_for_device(device):
+    def backend_for_device(device, **kwargs):
         return cuda_backend if device == "cuda" else cpu_backend
 
     mock_get_backend.side_effect = backend_for_device

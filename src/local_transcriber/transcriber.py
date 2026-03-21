@@ -21,12 +21,14 @@ def load_model(
     compute_type: str,
     on_status: Callable[[str], None] | None = None,
     strict_device: bool = False,
+    compute_type_explicit: bool = False,
 ) -> tuple[Any, str, Any, str]:
     """Загружает модель: ensure + create с fallback.
 
     Возвращает (model, actual_device, backend, model_path).
+    compute_type_explicit: True если пользователь явно указал --compute-type.
     """
-    backend = get_backend(device)
+    backend = get_backend(device, compute_type_explicit=compute_type_explicit)
     actual_device = device
 
     model_path = backend.ensure_model_available(model_name, compute_type, on_status)
