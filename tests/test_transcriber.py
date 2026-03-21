@@ -440,3 +440,75 @@ def test_ensure_model_available_rejects_incomplete_local_directory(tmp_path):
 
     with pytest.raises(ValueError, match="Неполная локальная модель"):
         ensure_model_available(str(model_dir))
+
+
+# === Cross-backend fallback (openvino → cpu) ===
+
+
+@patch("local_transcriber.transcriber.get_backend")
+def test_load_model_openvino_fallback_to_cpu(mock_get_backend):
+    """OpenVINO ошибка при init → fallback на CPU (FasterWhisper)."""
+    ov_backend = _make_backend(
+        create_model_error=RuntimeError("OpenVINO model load failed"),
+    )
+    cpu_model = MagicMock()
+    cpu_backend = _make_backend(model=cpu_model, model_path="/mock/cpu/model")
+
+    def backend_for_device(device, **kwargs):
+        return ov_backend if device == "openvino" else cpu_backend
+
+    mock_get_backend.side_effect = backend_for_device
+
+    with pytest.warns(UserWarning, match="Переключение на CPU"):
+        model, actual_device, backend, model_path = load_model(
+            "medium", "openvino", "int8",
+        )
+
+    assert actual_device == "cpu"
+    assert model is cpu_model
+    assert backend is cpu_backend
+    assert model_path == "/mock/cpu/model"
+
+
+@patch("local_transcriber.transcriber.get_backend")
+def test_transcribe_file_openvino_midstream_fallback(mock_get_backend):
+    """OpenVINO ошибка при транскрипции → fallback на CPU."""
+    ov_backend = _make_backend(
+        transcribe_error=RuntimeError("OpenVINO inference error"),
+    )
+    cpu_backend = _make_backend(
+        transcribe_result=_make_result(count=2, device_used="cpu"),
+        model_path="/mock/cpu/model",
+    )
+
+    def backend_for_device(device, **kwargs):
+        return ov_backend if device == "openvino" else cpu_backend
+
+    mock_get_backend.side_effect = backend_for_device
+
+    with pytest.warns(UserWarning, match="Переключение на CPU"):
+        tfr = _transcribe_file(
+            model=MagicMock(),
+            actual_device="openvino",
+            backend=ov_backend,
+            model_path="/mock/ov/model",
+            file_path=Path("test.mp3"),
+            model_name="medium",
+            compute_type="int8",
+        )
+
+    assert tfr.actual_device == "cpu"
+    assert tfr.backend is cpu_backend
+    assert tfr.model_path == "/mock/cpu/model"
+
+
+@patch("local_transcriber.transcriber.get_backend")
+def test_openvino_strict_device_no_fallback(mock_get_backend):
+    """strict_device=True + OpenVINO ошибка → raise."""
+    backend = _make_backend(
+        create_model_error=RuntimeError("OpenVINO model load failed"),
+    )
+    mock_get_backend.return_value = backend
+
+    with pytest.raises(RuntimeError, match="OpenVINO"):
+        load_model("medium", "openvino", "int8", strict_device=True)

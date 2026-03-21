@@ -148,9 +148,15 @@ def _is_backend_error(exc: BaseException, device: str) -> bool:
     """Определяет, связана ли ошибка с конкретным бэкендом (а не с пользовательскими данными)."""
     if device in ("cuda", "cpu"):
         return _is_cuda_error(exc)
-    # openvino и другие бэкенды: конкретные паттерны ошибок добавим
-    # при реализации бэкенда; пока — не маскируем ошибки
+    if device == "openvino":
+        return _is_openvino_error(exc)
     return False
+
+
+def _is_openvino_error(exc: BaseException) -> bool:
+    """Проверка ошибок OpenVINO runtime."""
+    msg = str(exc).lower()
+    return any(k in msg for k in ("openvino", "ov_", "inference_engine"))
 
 
 def _notify_status(on_status: Callable[[str], None] | None, message: str) -> None:
