@@ -55,7 +55,7 @@ def main(
     ),
     compute_type: str | None = typer.Option(
         None, "--compute-type", show_default=False,
-        help="Тип вычислений [по умолч.: float16 (GPU) / float32 (CPU)]"
+        help="Тип вычислений [по умолч.: float16 (CUDA) / int8 (OpenVINO) / float32 (CPU)]"
     ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Подробный вывод"),
     force: bool = typer.Option(False, "--force", "-f", help="Перезаписать существующие транскрипты"),
@@ -72,7 +72,7 @@ def main(
         resolved_device = detect_device(defaults["device"])
         defaults = apply_device_defaults(defaults, resolved_device, cli_values, config)
 
-        ct_explicit = compute_type is not None
+        ct_explicit = compute_type is not None or "compute_type" in config
 
         expanded = expand_globs(files)
         if not expanded:

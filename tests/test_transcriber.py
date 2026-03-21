@@ -512,3 +512,32 @@ def test_openvino_strict_device_no_fallback(mock_get_backend):
 
     with pytest.raises(RuntimeError, match="OpenVINO"):
         load_model("medium", "openvino", "int8", strict_device=True)
+
+
+@patch("local_transcriber.transcriber.get_backend")
+def test_openvino_runtime_error_triggers_fallback(mock_get_backend):
+    """Любой RuntimeError от OpenVINO бэкенда → fallback."""
+    ov_backend = _make_backend(
+        create_model_error=RuntimeError("Exception from src/inference/..."),
+    )
+    cpu_backend = _make_backend(model_path="/mock/cpu/model")
+
+    def backend_for_device(device, **kwargs):
+        return ov_backend if device == "openvino" else cpu_backend
+
+    mock_get_backend.side_effect = backend_for_device
+
+    with pytest.warns(UserWarning, match="Переключение на CPU"):
+        _, actual_device, _, _ = load_model("medium", "openvino", "int8")
+
+    assert actual_device == "cpu"
+
+
+def test_ensure_model_available_openvino_default_compute_type():
+    """ensure_model_available(device='openvino') без compute_type не падает."""
+    from local_transcriber.backends.openvino import OpenVINOBackend
+
+    backend = OpenVINOBackend(compute_type_explicit=True)
+    # Проверяем что _resolve_repo работает с дефолтным compute_type для openvino (int8)
+    repo = backend._resolve_repo("medium", "int8")
+    assert repo == "OpenVINO/whisper-medium-int8-ov"

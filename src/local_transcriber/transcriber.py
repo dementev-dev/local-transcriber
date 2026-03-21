@@ -118,6 +118,7 @@ def transcribe(
     """High-level API: загрузка модели + транскрипция за один вызов."""
     model, actual_device, backend, model_path = load_model(
         model_name, device, compute_type, on_status, strict_device,
+        compute_type_explicit=True,  # Python API — caller explicitly chose compute_type
     )
     tfr = _transcribe_file(
         model, actual_device, backend, model_path,
@@ -130,11 +131,19 @@ def transcribe(
 def ensure_model_available(
     model_name: str,
     device: str = "cpu",
-    compute_type: str = "float32",
+    compute_type: str | None = None,
     on_status: Callable[[str], None] | None = None,
 ) -> str:
     """Публичный helper: гарантирует наличие модели для указанного бэкенда."""
-    backend = get_backend(device)
+    from local_transcriber.config import DEVICE_DEFAULTS, HARDCODED_DEFAULTS
+
+    if compute_type is None:
+        device_defs = DEVICE_DEFAULTS.get(device, {})
+        compute_type = device_defs.get("compute_type", HARDCODED_DEFAULTS["compute_type"])
+        explicit = False
+    else:
+        explicit = True
+    backend = get_backend(device, compute_type_explicit=explicit)
     return backend.ensure_model_available(model_name, compute_type, on_status)
 
 
@@ -154,9 +163,14 @@ def _is_backend_error(exc: BaseException, device: str) -> bool:
 
 
 def _is_openvino_error(exc: BaseException) -> bool:
-    """Проверка ошибок OpenVINO runtime."""
-    msg = str(exc).lower()
-    return any(k in msg for k in ("openvino", "ov_", "inference_engine"))
+    """Проверка ошибок OpenVINO runtime.
+
+    OpenVINO runtime кидает RuntimeError с разнообразными сообщениями
+    (openvino, ov_, inference, plugins, src/...). Пользовательские ошибки
+    (файл не найден, неверный формат) приходят как FileNotFoundError/ValueError
+    и не попадают сюда. Поэтому для RuntimeError считаем это backend failure.
+    """
+    return isinstance(exc, RuntimeError)
 
 
 def _notify_status(on_status: Callable[[str], None] | None, message: str) -> None:
