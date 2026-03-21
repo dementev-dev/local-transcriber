@@ -14,9 +14,7 @@ from .transcriber import (
     Segment,
     _is_cuda_error,
     _transcribe_file,
-    ensure_model_available,
     load_model,
-    transcribe,
 )
 from .utils import (
     build_output_path,
@@ -31,6 +29,16 @@ app = typer.Typer()
 console = Console(stderr=True)
 
 
+def _format_device_info(device_used: str) -> str:
+    """Формирует строку устройства для шапки транскрипта."""
+    if device_used == "cuda":
+        gpu_name = get_gpu_name()
+        return f"CUDA ({gpu_name or 'Unknown GPU'})"
+    if device_used == "openvino":
+        return "OpenVINO (CPU)"
+    return "CPU"
+
+
 @app.command()
 def main(
     files: list[Path] = typer.Argument(..., help="Пути к аудио/видеофайлам"),
@@ -42,7 +50,8 @@ def main(
     ),
     output: Path | None = typer.Option(None, "--output", "-o", help="Путь к выходному файлу"),
     device: str | None = typer.Option(
-        None, "--device", "-d", show_default=False, help="Устройство (auto|cpu|cuda) [по умолч.: auto]"
+        None, "--device", "-d", show_default=False,
+        help="Устройство (auto|cpu|cuda) [по умолч.: auto]"
     ),
     compute_type: str | None = typer.Option(
         None, "--compute-type", show_default=False,
@@ -120,7 +129,6 @@ def _run_single(
     validated_file = validate_input_file(file)
     requested_device = defaults["device"]
     resolved_device = detect_device(requested_device)
-    # Если пользователь явно указал устройство — запрещаем fallback на CPU
     strict = requested_device != "auto"
     output_path = build_output_path(validated_file, output)
 
@@ -131,15 +139,11 @@ def _run_single(
         f"Compute: [bold]{defaults['compute_type']}[/bold]"
     )
 
-    model_path = ensure_model_available(
-        defaults["model"], on_status=lambda message: console.print(message)
-    )
-
     def on_segment(seg: Segment) -> None:
         console.print(f"  [{seg.start:.2f}s] {seg.text.strip()}")
 
-    model_obj, actual_device = load_model(
-        model_path, resolved_device, defaults["compute_type"],
+    model_obj, actual_device, backend, model_path = load_model(
+        defaults["model"], resolved_device, defaults["compute_type"],
         on_status=lambda msg: console.print(msg), strict_device=strict,
     )
 
@@ -147,8 +151,10 @@ def _run_single(
         tfr = _transcribe_file(
             model=model_obj,
             actual_device=actual_device,
+            backend=backend,
+            model_path=model_path,
             file_path=validated_file,
-            model_name=model_path,
+            model_name=defaults["model"],
             compute_type=defaults["compute_type"],
             language=defaults["language"] if defaults["language"] != "auto" else None,
             on_segment=on_segment if verbose else None,
@@ -176,12 +182,7 @@ def _run_single(
             f"Речь не обнаружена в файле {validated_file.name}", style="yellow"
         )
 
-    if result.device_used == "cuda":
-        gpu_name = get_gpu_name()
-        device_info = f"CUDA ({gpu_name or 'Unknown GPU'})"
-    else:
-        device_info = "CPU"
-
+    device_info = _format_device_info(result.device_used)
     language_mode = "detected" if defaults["language"] == "auto" else "forced"
 
     content = format_transcript(
@@ -232,15 +233,12 @@ def _run_batch(
             raise SystemExit(1)
         return
 
-    # Phase 2: Load model
+    # Phase 2: Load model (ensure + create в одном вызове)
     requested_device = defaults["device"]
     resolved_device = detect_device(requested_device)
     strict = requested_device != "auto"
-    model_path = ensure_model_available(
-        defaults["model"], on_status=lambda msg: console.print(msg)
-    )
-    model_obj, actual_device = load_model(
-        model_path, resolved_device, defaults["compute_type"],
+    model_obj, actual_device, backend, model_path = load_model(
+        defaults["model"], resolved_device, defaults["compute_type"],
         on_status=lambda msg: console.print(msg), strict_device=strict,
     )
 
@@ -277,8 +275,10 @@ def _run_batch(
                 tfr = _transcribe_file(
                     model=model_obj,
                     actual_device=actual_device,
+                    backend=backend,
+                    model_path=model_path,
                     file_path=file,
-                    model_name=model_path,
+                    model_name=defaults["model"],
                     compute_type=defaults["compute_type"],
                     language=defaults["language"] if defaults["language"] != "auto" else None,
                     on_segment=on_segment if verbose else None,
@@ -291,8 +291,11 @@ def _run_batch(
                     f"  {file.name}: fallback на {tfr.actual_device} при транскрипции",
                     style="yellow",
                 )
-            # Обновляем после возможного mid-stream fallback на CPU
-            model_obj, actual_device = tfr.model, tfr.actual_device
+            # Обновляем после возможного mid-stream fallback
+            model_obj = tfr.model
+            actual_device = tfr.actual_device
+            backend = tfr.backend
+            model_path = tfr.model_path
 
             result = tfr.result
 
@@ -301,11 +304,7 @@ def _run_batch(
                     f"  Речь не обнаружена: {file.name}", style="yellow"
                 )
 
-            if result.device_used == "cuda":
-                gpu_name = get_gpu_name()
-                device_info = f"CUDA ({gpu_name or 'Unknown GPU'})"
-            else:
-                device_info = "CPU"
+            device_info = _format_device_info(result.device_used)
 
             content = format_transcript(
                 result=result,

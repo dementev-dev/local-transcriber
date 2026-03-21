@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from .transcriber import Segment, TranscribeResult
+from .types import Segment, TranscribeResult
 
 _PAUSE_THRESHOLD_S = 2.0  # пауза между сегментами для разбиения на абзацы
 _MAX_PARAGRAPH_S = 60.0  # максимальная длительность абзаца
