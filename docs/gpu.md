@@ -1,10 +1,46 @@
-# GPU и CUDA
+# Ускорение транскрипции
 
 ## Режимы `--device`
 
-- `auto` (по умолчанию) — выберет GPU если `nvidia-smi` доступен, иначе CPU
-- `cuda` — строго GPU, ошибка если недоступен (без silent fallback)
-- `cpu` — строго CPU
+- `auto` (по умолчанию) — CUDA → OpenVINO → CPU (первый доступный)
+- `cuda` — строго NVIDIA GPU, ошибка если недоступен
+- `openvino` — OpenVINO на CPU (ускорение 2-4x на x86)
+- `cpu` — строго CPU (faster-whisper/CTranslate2)
+
+## Какой бэкенд на каком оборудовании
+
+| Оборудование | Рекомендуемый `--device` | Бэкенд | Ожидаемая скорость |
+|---|---|---|---|
+| NVIDIA GPU (6+ GB VRAM) | `auto` / `cuda` | faster-whisper (CTranslate2) | 7-19x реалтайм |
+| Intel/AMD x86 CPU | `auto` / `openvino` | OpenVINO GenAI | 3-6x реалтайм* |
+| Любой CPU (fallback) | `cpu` | faster-whisper (CTranslate2) | ~1.5x реалтайм |
+| Apple Silicon (macOS) | `cpu` | faster-whisper (CTranslate2) | ~2x реалтайм |
+
+\* Ожидаемая оценка на основе бенчмарков OpenVINO. Реальная скорость зависит от CPU и модели.
+
+## OpenVINO
+
+OpenVINO ускоряет inference на x86 процессорах (Intel и AMD) через оптимизированные инструкции
+(AVX2, AVX-512, VNNI, AMX). Ставится автоматически на Linux и Windows (x86_64/AMD64).
+
+- **Модели**: предконвертированные из [HuggingFace](https://huggingface.co/OpenVINO) (int8/fp16)
+- **Дефолт**: `medium` + `int8` (для `large-v3` автоматически выбирается `fp16`)
+- **Аудиодекодирование**: через PyAV (бандлит FFmpeg), системный ffmpeg не нужен
+
+### Доступные OpenVINO модели
+
+| Модель | int8 | fp16 |
+|--------|------|------|
+| tiny | OpenVINO/whisper-tiny-int8-ov | — |
+| base | — | OpenVINO/whisper-base-fp16-ov |
+| small | OpenVINO/whisper-small-int8-ov | — |
+| medium | OpenVINO/whisper-medium-int8-ov | — |
+| large-v3 | OpenVINO/whisper-large-v3-int8-ov | OpenVINO/whisper-large-v3-fp16-ov |
+
+### Качество OpenVINO int8
+
+OpenVINO использует NNCF (калиброванная post-training квантизация), отличается от runtime-квантизации
+CTranslate2. Качество может быть другим — **тестирование на реальных сэмплах рекомендуется**.
 
 ## Настройка по платформам
 
@@ -17,12 +53,10 @@
 
 ### Windows
 
-Нужен системный CUDA toolkit:
+Нужен системный **CUDA 12** (ctranslate2 4.7 не совместим с CUDA 11 и 13):
 
 ```bash
-choco install cuda
-# или
-winget install -e --id Nvidia.CUDA   # требует запуска от имени администратора
+winget install -e --id Nvidia.CUDA --version 12.9   # требует запуска от имени администратора
 ```
 
 После установки перезапустите терминал.
@@ -77,11 +111,9 @@ SQL, PostgreSQL, Greenplum, Airflow, ClickHouse, Docker, CDR, GTP, MAP).
 
 ### Windows: ошибка при загрузке модели на GPU
 
-GPU на Windows требует CUDA toolkit (включает cuBLAS). Установите:
+GPU на Windows требует **CUDA 12** (ctranslate2 4.7 не совместим с CUDA 11 и 13). Установите:
 ```bash
-choco install cuda
-# или
-winget install -e --id Nvidia.CUDA
+winget install -e --id Nvidia.CUDA --version 12.9   # требует запуска от имени администратора
 ```
 После установки перезапустите терминал.
 

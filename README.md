@@ -8,7 +8,7 @@ transcribe meeting.mp4
 ```
 
 - **Полностью локально** — данные не покидают машину
-- **Авто-GPU** — автоматически использует NVIDIA CUDA, если доступен
+- **Авто-ускорение** — NVIDIA CUDA, OpenVINO (Intel/AMD CPU) или CPU fallback
 - **Батч-режим** — обработка нескольких файлов за один вызов
 - **Markdown с таймкодами** — удобен для суммаризации ИИ
 - **Аудио и видео** — mp3, wav, mp4, mkv и [другие форматы](#поддерживаемые-форматы)
@@ -30,12 +30,12 @@ powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | ie
 uv tool install git+https://github.com/dementev-dev/local-transcriber
 ```
 
-**3. (Опционально) GPU-ускорение:**
+**3. Ускорение (ставится автоматически):**
 
-Если есть NVIDIA GPU — транскрипция будет в 5–10× быстрее. Требуется **CUDA 12** (ctranslate2 4.7 не совместим с CUDA 11 и 13).
-
-- **Windows**: `winget install -e --id Nvidia.CUDA --version 12.9` (от администратора), перезапустить терминал
-- **Linux / WSL2**: работает из коробки (нужен только драйвер: `nvidia-smi`)
+- **OpenVINO** (Intel/AMD x86 CPU): ставится автоматически на Linux и Windows — ускорение в 2-4 раза
+- **NVIDIA CUDA** (GPU): если есть GPU — транскрипция в 5-10× быстрее
+  - **Windows**: `winget install -e --id Nvidia.CUDA --version 12.9` (от администратора), перезапустить терминал
+  - **Linux / WSL2**: работает из коробки (нужен только драйвер: `nvidia-smi`)
 
 **4. Готово:**
 
@@ -106,8 +106,8 @@ transcribe *.mp4 --force
 | `--model` | `-m` | `medium` | Модель Whisper |
 | `--language` | `-l` | `ru` | Язык (ru, en, auto и др.) |
 | `--output` | `-o` | `<файл>-transcript.md` | Путь к выходному файлу |
-| `--device` | `-d` | `auto` | Устройство (auto, cpu, cuda) |
-| `--compute-type` | — | float16 (GPU) / float32 (CPU) | Тип вычислений |
+| `--device` | `-d` | `auto` | Устройство (auto, cpu, cuda, openvino) |
+| `--compute-type` | — | float16 (CUDA) / int8 (OpenVINO) / float32 (CPU) | Тип вычислений |
 | `--force` | `-f` | — | Перезаписать существующие транскрипты |
 | `--verbose` | `-v` | — | Подробный вывод |
 
@@ -116,6 +116,7 @@ transcribe *.mp4 --force
 |  | Linux / WSL2 | macOS | Windows |
 |---|---|---|---|
 | CPU | ✅ | ✅ | ✅ |
+| OpenVINO (x86 CPU) | ✅ авто | — | ✅ авто |
 | GPU (NVIDIA) | ✅ авто | — | ✅ (нужен CUDA 12) |
 
 <details>
@@ -166,11 +167,11 @@ language = "en"
 
 Дефолты зависят от устройства:
 
-| Параметр | GPU (CUDA) | CPU |
-|----------|-----------|-----|
-| model | medium | medium |
-| compute_type | float16 | float32 |
-| language | ru | ru |
+| Параметр | CUDA | OpenVINO | CPU |
+|----------|------|----------|-----|
+| model | medium | medium | medium |
+| compute_type | float16 | int8 | float32 |
+| language | ru | ru | ru |
 
 ## Модели и GPU
 
@@ -195,19 +196,23 @@ language = "en"
 <details>
 <summary>Типы квантизации (--compute-type)</summary>
 
-| Тип | Устройство | VRAM/RAM | Качество | Когда использовать |
-|-----|-----------|----------|----------|--------------------|
-| `float16` | GPU | ~4.5-5 GB | Отлично | **По умолчанию для GPU** |
-| `int8_float16` | GPU | ~4.7 GB | Отлично | GPU от 6 GB, альтернатива float16 |
-| `int8` | GPU/CPU | Низкое | Хорошо, но бывают галлюцинации | GPU от 4 GB, CPU |
+| Тип | Бэкенд | VRAM/RAM | Качество | Когда использовать |
+|-----|--------|----------|----------|--------------------|
+| `float16` | CUDA | ~4.5-5 GB | Отлично | **По умолчанию для CUDA** |
+| `int8_float16` | CUDA | ~4.7 GB | Отлично | GPU от 6 GB, альтернатива float16 |
+| `int8` | CUDA / OpenVINO | Низкое | Хорошо, но бывают галлюцинации | **По умолчанию для OpenVINO** |
+| `fp16` | OpenVINO | Низкое | Отлично | OpenVINO large-v3 (выбирается автоматически) |
 | `float32` | CPU | Среднее | Отлично | **По умолчанию для CPU** |
 
 **Важно:** `int8` на длинных записях может давать галлюцинации (повтор фраз, потеря контента).
-`float16` и `float32` значительно стабильнее на записях >20 минут.
+`float16`/`fp16` и `float32` значительно стабильнее на записях >20 минут.
+
+> Для OpenVINO `--compute-type` выбирает предквантизированную модель (int8 или fp16),
+> а не runtime-параметр. Для `large-v3` по умолчанию выбирается `fp16`.
 
 </details>
 
-Подробнее: бенчмарки, совместимость GPU, результаты тестирования — [docs/gpu.md](docs/gpu.md).
+Подробнее: бенчмарки, OpenVINO, совместимость GPU, результаты тестирования — [docs/gpu.md](docs/gpu.md).
 
 <details>
 <summary>Формат вывода</summary>
