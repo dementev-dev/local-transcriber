@@ -108,9 +108,11 @@ class OpenVINOBackend:
         segments: list[Segment] = []
         if hasattr(result, "chunks") and result.chunks:
             for chunk in result.chunks:
+                start = max(0.0, chunk.start_ts)
+                end = max(start, chunk.end_ts)
                 seg = Segment(
-                    start=chunk.start_ts,
-                    end=chunk.end_ts,
+                    start=start,
+                    end=end,
                     text=chunk.text,
                 )
                 if on_segment is not None:
