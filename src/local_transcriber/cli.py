@@ -136,11 +136,6 @@ def _run_single(
     output_path = build_output_path(validated_file, output)
 
     console.print(f"Файл: [bold]{validated_file.name}[/bold]")
-    console.print(
-        f"Модель: [bold]{defaults['model']}[/bold]  "
-        f"Устройство: [bold]{resolved_device}[/bold]  "
-        f"Compute: [bold]{defaults['compute_type']}[/bold]"
-    )
 
     def on_segment(seg: Segment) -> None:
         console.print(f"  [{seg.start:.2f}s] {seg.text.strip()}")
@@ -149,6 +144,12 @@ def _run_single(
         defaults["model"], resolved_device, defaults["compute_type"],
         on_status=lambda msg: console.print(msg), strict_device=strict,
         compute_type_explicit=compute_type_explicit,
+    )
+    actual_ct = getattr(backend, "actual_compute_type", defaults["compute_type"]) or defaults["compute_type"]
+    console.print(
+        f"Модель: [bold]{defaults['model']}[/bold]  "
+        f"Устройство: [bold]{actual_device}[/bold]  "
+        f"Compute: [bold]{actual_ct}[/bold]"
     )
 
     with Status("Подготавливаю запуск...", console=console) as status:

@@ -539,5 +539,6 @@ def test_ensure_model_available_openvino_default_compute_type():
 
     backend = OpenVINOBackend(compute_type_explicit=True)
     # Проверяем что _resolve_repo работает с дефолтным compute_type для openvino (int8)
-    repo = backend._resolve_repo("medium", "int8")
+    repo, ct = backend._resolve_repo("medium", "int8")
     assert repo == "OpenVINO/whisper-medium-int8-ov"
+    assert ct == "int8"

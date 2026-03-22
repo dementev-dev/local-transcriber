@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+import time
 import warnings
 from collections.abc import Callable
 from pathlib import Path
@@ -47,6 +49,7 @@ class OpenVINOBackend:
     def __init__(self, compute_type_explicit: bool = True):
         """compute_type_explicit=False означает, что compute_type пришёл из дефолтов."""
         self._compute_type_explicit = compute_type_explicit
+        self.actual_compute_type: str | None = None
 
     def ensure_model_available(
         self,
@@ -55,7 +58,8 @@ class OpenVINOBackend:
         on_status: Callable[[str], None] | None = None,
     ) -> str:
         """Скачивает/находит OpenVINO модель нужной квантизации."""
-        repo_id = self._resolve_repo(model_name, compute_type)
+        repo_id, resolved_ct = self._resolve_repo(model_name, compute_type)
+        self.actual_compute_type = resolved_ct
 
         try:
             _notify(on_status, f"Проверяю кэш модели {model_name} (OpenVINO)...")
@@ -102,8 +106,9 @@ class OpenVINOBackend:
         if language:
             kwargs["language"] = f"<|{language}|>"
 
-        _notify(on_status, "Транскрибирую (OpenVINO)...")
-        result = model.generate(raw_speech.tolist(), **kwargs)
+        duration_str = f"{int(duration // 60):02d}:{int(duration % 60):02d}"
+        pcm_list = raw_speech.tolist()
+        result = _generate_with_progress(model, pcm_list, kwargs, duration_str, on_status)
 
         segments: list[Segment] = []
         if hasattr(result, "chunks") and result.chunks:
@@ -134,8 +139,11 @@ class OpenVINOBackend:
             device_used="",  # оркестратор проставит
         )
 
-    def _resolve_repo(self, model_name: str, compute_type: str) -> str:
-        """Находит HF repo для пары (model, compute_type) с fallback."""
+    def _resolve_repo(self, model_name: str, compute_type: str) -> tuple[str, str]:
+        """Находит HF repo для пары (model, compute_type) с fallback.
+
+        Возвращает (repo_id, actual_compute_type).
+        """
         # Для неявного compute_type: override для конкретных моделей
         if not self._compute_type_explicit and model_name in _IMPLICIT_COMPUTE_TYPE_OVERRIDES:
             compute_type = _IMPLICIT_COMPUTE_TYPE_OVERRIDES[model_name]
@@ -143,7 +151,7 @@ class OpenVINOBackend:
         # Точное совпадение
         repo = MODEL_REPOS.get((model_name, compute_type))
         if repo:
-            return repo
+            return repo, compute_type
 
         # Fallback только для неявного compute_type
         if not self._compute_type_explicit:
@@ -151,7 +159,7 @@ class OpenVINOBackend:
             for fallback_ct in fallbacks:
                 repo = MODEL_REPOS.get((model_name, fallback_ct))
                 if repo:
-                    return repo
+                    return repo, fallback_ct
 
         # Явный --compute-type с несуществующей парой → ошибка
         available = [ct for (m, ct) in MODEL_REPOS if m == model_name]
@@ -166,6 +174,39 @@ class OpenVINOBackend:
             f"Модель '{model_name}' не найдена для OpenVINO. "
             f"Доступные модели: {', '.join(all_models)}"
         )
+
+
+def _generate_with_progress(
+    model: Any,
+    pcm_list: list[float],
+    kwargs: dict[str, Any],
+    duration_str: str,
+    on_status: Callable[[str], None] | None,
+) -> Any:
+    """Запускает model.generate() в потоке, обновляя статус с elapsed time."""
+    result_box: list[Any] = [None]
+    error_box: list[BaseException | None] = [None]
+
+    def run() -> None:
+        try:
+            result_box[0] = model.generate(pcm_list, **kwargs)
+        except BaseException as exc:
+            error_box[0] = exc
+
+    thread = threading.Thread(target=run)
+    start = time.monotonic()
+    thread.start()
+
+    while thread.is_alive():
+        elapsed = int(time.monotonic() - start)
+        elapsed_str = f"{elapsed // 60:02d}:{elapsed % 60:02d}"
+        _notify(on_status, f"Транскрибирую (OpenVINO)... {elapsed_str} / {duration_str} аудио")
+        thread.join(timeout=1.0)
+
+    if error_box[0] is not None:
+        raise error_box[0]
+
+    return result_box[0]
 
 
 def _notify(on_status: Callable[[str], None] | None, message: str) -> None:

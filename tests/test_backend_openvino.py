@@ -19,12 +19,12 @@ from local_transcriber.types import Segment
 
 def test_resolve_repo_exact_match():
     backend = OpenVINOBackend(compute_type_explicit=True)
-    assert backend._resolve_repo("medium", "int8") == "OpenVINO/whisper-medium-int8-ov"
+    assert backend._resolve_repo("medium", "int8") == ("OpenVINO/whisper-medium-int8-ov", "int8")
 
 
 def test_resolve_repo_large_v3_fp16():
     backend = OpenVINOBackend(compute_type_explicit=True)
-    assert backend._resolve_repo("large-v3", "fp16") == "OpenVINO/whisper-large-v3-fp16-ov"
+    assert backend._resolve_repo("large-v3", "fp16") == ("OpenVINO/whisper-large-v3-fp16-ov", "fp16")
 
 
 def test_resolve_repo_explicit_unsupported_pair_raises():
@@ -44,20 +44,20 @@ def test_resolve_repo_implicit_fallback():
     """Неявный compute_type: если int8 недоступен для base, fallback на fp16."""
     backend = OpenVINOBackend(compute_type_explicit=False)
     # base + int8 не существует, но base + fp16 есть
-    assert backend._resolve_repo("base", "int8") == "OpenVINO/whisper-base-fp16-ov"
+    assert backend._resolve_repo("base", "int8") == ("OpenVINO/whisper-base-fp16-ov", "fp16")
 
 
 def test_resolve_repo_implicit_large_v3_prefers_fp16():
     """Неявный compute_type: large-v3 автоматически получает fp16."""
     backend = OpenVINOBackend(compute_type_explicit=False)
     # Дефолт int8, но для large-v3 override на fp16
-    assert backend._resolve_repo("large-v3", "int8") == "OpenVINO/whisper-large-v3-fp16-ov"
+    assert backend._resolve_repo("large-v3", "int8") == ("OpenVINO/whisper-large-v3-fp16-ov", "fp16")
 
 
 def test_resolve_repo_explicit_large_v3_int8_respected():
     """Явный --compute-type int8 для large-v3 → уважается."""
     backend = OpenVINOBackend(compute_type_explicit=True)
-    assert backend._resolve_repo("large-v3", "int8") == "OpenVINO/whisper-large-v3-int8-ov"
+    assert backend._resolve_repo("large-v3", "int8") == ("OpenVINO/whisper-large-v3-int8-ov", "int8")
 
 
 # === ensure_model_available ===

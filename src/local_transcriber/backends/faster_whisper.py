@@ -46,6 +46,9 @@ MODEL_REQUIRED_FILES = [
 class FasterWhisperBackend:
     """Бэкенд транскрипции через faster-whisper (CTranslate2)."""
 
+    def __init__(self):
+        self.actual_compute_type: str | None = None
+
     def ensure_model_available(
         self,
         model_name: str,
@@ -53,6 +56,7 @@ class FasterWhisperBackend:
         on_status: Callable[[str], None] | None = None,
     ) -> str:
         """Резолвит alias модели в repo_id и гарантирует наличие файлов."""
+        self.actual_compute_type = compute_type
         local_path = Path(model_name).expanduser()
         if local_path.is_dir():
             _validate_model_dir(local_path)
