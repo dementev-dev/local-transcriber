@@ -46,10 +46,18 @@ MODEL_REQUIRED_FILES = [
 class OpenVINOBackend:
     """Бэкенд транскрипции через openvino-genai WhisperPipeline."""
 
-    def __init__(self, compute_type_explicit: bool = True):
-        """compute_type_explicit=False означает, что compute_type пришёл из дефолтов."""
+    def __init__(
+        self,
+        ov_device: str = "openvino-cpu",
+        compute_type_explicit: bool = True,
+    ):
+        """ov_device: "openvino", "openvino-gpu" или "openvino-cpu".
+        compute_type_explicit=False означает, что compute_type пришёл из дефолтов.
+        """
+        self._ov_device = ov_device
         self._compute_type_explicit = compute_type_explicit
         self.actual_compute_type: str | None = None
+        self.actual_ov_device: str | None = None
 
     def ensure_model_available(
         self,
@@ -76,6 +84,22 @@ class OpenVINOBackend:
         _validate_model_dir(downloaded_path)
         return str(downloaded_path)
 
+    def _resolve_ov_device(self) -> str:
+        """Резолвит device string в OpenVINO device: ``"GPU"`` или ``"CPU"``."""
+        if self._ov_device == "openvino-gpu":
+            return "GPU"
+        if self._ov_device == "openvino-cpu":
+            return "CPU"
+        # "openvino" → авто-детект
+        try:
+            from openvino import Core
+
+            if "GPU" in Core().available_devices:
+                return "GPU"
+        except Exception:
+            pass
+        return "CPU"
+
     def create_model(
         self,
         model_path: str,
@@ -85,7 +109,9 @@ class OpenVINOBackend:
         """Создаёт WhisperPipeline."""
         import openvino_genai as ov_genai
 
-        return ov_genai.WhisperPipeline(model_path, "CPU")
+        ov_dev = self._resolve_ov_device()
+        self.actual_ov_device = ov_dev
+        return ov_genai.WhisperPipeline(model_path, ov_dev)
 
     def transcribe(
         self,

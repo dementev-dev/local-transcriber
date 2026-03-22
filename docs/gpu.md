@@ -2,9 +2,11 @@
 
 ## Режимы `--device`
 
-- `auto` (по умолчанию) — CUDA → OpenVINO → CPU (первый доступный)
+- `auto` (по умолчанию) — CUDA → OpenVINO GPU → OpenVINO CPU → CPU (первый доступный)
 - `cuda` — строго NVIDIA GPU, ошибка если недоступен
-- `openvino` — OpenVINO на CPU (ускорение 2-4x на x86)
+- `openvino` — авто-выбор OpenVINO GPU или CPU
+- `openvino-gpu` — строго Intel GPU через OpenVINO
+- `openvino-cpu` — строго CPU через OpenVINO (ускорение 2-4x на x86)
 - `cpu` — строго CPU (faster-whisper/CTranslate2)
 
 ## Какой бэкенд на каком оборудовании
@@ -12,7 +14,8 @@
 | Оборудование | Рекомендуемый `--device` | Бэкенд | Ожидаемая скорость |
 |---|---|---|---|
 | NVIDIA GPU (6+ GB VRAM) | `auto` / `cuda` | faster-whisper (CTranslate2) | 7-19x реалтайм |
-| Intel/AMD x86 CPU | `auto` / `openvino` | OpenVINO GenAI | 3-6x реалтайм* |
+| Intel Arc iGPU / dGPU | `auto` / `openvino-gpu` | OpenVINO GenAI (GPU) | TBD |
+| Intel/AMD x86 CPU | `auto` / `openvino-cpu` | OpenVINO GenAI (CPU) | 3-6x реалтайм* |
 | Любой CPU (fallback) | `cpu` | faster-whisper (CTranslate2) | ~1.5x реалтайм |
 | Apple Silicon (macOS) | `cpu` | faster-whisper (CTranslate2) | ~2x реалтайм |
 

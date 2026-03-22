@@ -104,17 +104,70 @@ def test_ensure_model_available_downloads(mock_download, tmp_path):
 # === create_model ===
 
 
-def test_create_model():
+def test_create_model_cpu():
     mock_ov = MagicMock()
     mock_pipeline = MagicMock()
     mock_ov.WhisperPipeline.return_value = mock_pipeline
 
-    backend = OpenVINOBackend()
+    backend = OpenVINOBackend(ov_device="openvino-cpu")
     with patch.dict("sys.modules", {"openvino_genai": mock_ov}):
-        model = backend.create_model("/path/to/model", "openvino", "int8")
+        model = backend.create_model("/path/to/model", "openvino-cpu", "int8")
 
     mock_ov.WhisperPipeline.assert_called_once_with("/path/to/model", "CPU")
     assert model is mock_pipeline
+    assert backend.actual_ov_device == "CPU"
+
+
+def test_create_model_gpu():
+    mock_ov = MagicMock()
+    mock_pipeline = MagicMock()
+    mock_ov.WhisperPipeline.return_value = mock_pipeline
+
+    backend = OpenVINOBackend(ov_device="openvino-gpu")
+    with patch.dict("sys.modules", {"openvino_genai": mock_ov}):
+        model = backend.create_model("/path/to/model", "openvino-gpu", "fp16")
+
+    mock_ov.WhisperPipeline.assert_called_once_with("/path/to/model", "GPU")
+    assert model is mock_pipeline
+    assert backend.actual_ov_device == "GPU"
+
+
+def test_create_model_openvino_auto_detects_gpu():
+    """ov_device='openvino' + GPU доступен → WhisperPipeline получает 'GPU'."""
+    mock_ov = MagicMock()
+    mock_pipeline = MagicMock()
+    mock_ov.WhisperPipeline.return_value = mock_pipeline
+
+    mock_core = MagicMock()
+    mock_core.return_value.available_devices = ["CPU", "GPU"]
+
+    backend = OpenVINOBackend(ov_device="openvino")
+    with (
+        patch.dict("sys.modules", {"openvino_genai": mock_ov, "openvino": MagicMock(Core=mock_core)}),
+    ):
+        model = backend.create_model("/path/to/model", "openvino", "int8")
+
+    mock_ov.WhisperPipeline.assert_called_once_with("/path/to/model", "GPU")
+    assert backend.actual_ov_device == "GPU"
+
+
+def test_create_model_openvino_auto_falls_back_to_cpu():
+    """ov_device='openvino' + нет GPU → WhisperPipeline получает 'CPU'."""
+    mock_ov = MagicMock()
+    mock_pipeline = MagicMock()
+    mock_ov.WhisperPipeline.return_value = mock_pipeline
+
+    mock_core = MagicMock()
+    mock_core.return_value.available_devices = ["CPU"]
+
+    backend = OpenVINOBackend(ov_device="openvino")
+    with (
+        patch.dict("sys.modules", {"openvino_genai": mock_ov, "openvino": MagicMock(Core=mock_core)}),
+    ):
+        model = backend.create_model("/path/to/model", "openvino", "int8")
+
+    mock_ov.WhisperPipeline.assert_called_once_with("/path/to/model", "CPU")
+    assert backend.actual_ov_device == "CPU"
 
 
 # === transcribe ===

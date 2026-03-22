@@ -372,7 +372,7 @@ def test_ensure_model_available_downloads_on_cache_miss(mock_snapshot_download, 
 
     result = ensure_model_available("large-v3", on_status=statuses.append)
 
-    assert result == "/downloaded/model"
+    assert Path(result) == Path("/downloaded/model")
     assert mock_snapshot_download.call_args_list[0].kwargs["local_files_only"] is True
     assert mock_snapshot_download.call_args_list[1].kwargs["local_files_only"] is False
     assert "Проверяю кэш модели large-v3..." in statuses
@@ -446,8 +446,8 @@ def test_ensure_model_available_rejects_incomplete_local_directory(tmp_path):
 
 
 @patch("local_transcriber.transcriber.get_backend")
-def test_load_model_openvino_fallback_to_cpu(mock_get_backend):
-    """OpenVINO ошибка при init → fallback на CPU (FasterWhisper)."""
+def test_load_model_openvino_gpu_fallback_to_cpu(mock_get_backend):
+    """OpenVINO GPU ошибка при init → fallback на CPU (FasterWhisper)."""
     ov_backend = _make_backend(
         create_model_error=RuntimeError("OpenVINO model load failed"),
     )
@@ -455,13 +455,13 @@ def test_load_model_openvino_fallback_to_cpu(mock_get_backend):
     cpu_backend = _make_backend(model=cpu_model, model_path="/mock/cpu/model")
 
     def backend_for_device(device, **kwargs):
-        return ov_backend if device == "openvino" else cpu_backend
+        return ov_backend if device == "openvino-gpu" else cpu_backend
 
     mock_get_backend.side_effect = backend_for_device
 
     with pytest.warns(UserWarning, match="Переключение на CPU"):
         model, actual_device, backend, model_path = load_model(
-            "medium", "openvino", "int8",
+            "medium", "openvino-gpu", "fp16",
         )
 
     assert actual_device == "cpu"
@@ -471,8 +471,33 @@ def test_load_model_openvino_fallback_to_cpu(mock_get_backend):
 
 
 @patch("local_transcriber.transcriber.get_backend")
-def test_transcribe_file_openvino_midstream_fallback(mock_get_backend):
-    """OpenVINO ошибка при транскрипции → fallback на CPU."""
+def test_load_model_openvino_cpu_fallback_to_cpu(mock_get_backend):
+    """OpenVINO CPU ошибка при init → fallback на CPU (FasterWhisper)."""
+    ov_backend = _make_backend(
+        create_model_error=RuntimeError("OpenVINO model load failed"),
+    )
+    cpu_model = MagicMock()
+    cpu_backend = _make_backend(model=cpu_model, model_path="/mock/cpu/model")
+
+    def backend_for_device(device, **kwargs):
+        return ov_backend if device == "openvino-cpu" else cpu_backend
+
+    mock_get_backend.side_effect = backend_for_device
+
+    with pytest.warns(UserWarning, match="Переключение на CPU"):
+        model, actual_device, backend, model_path = load_model(
+            "medium", "openvino-cpu", "int8",
+        )
+
+    assert actual_device == "cpu"
+    assert model is cpu_model
+    assert backend is cpu_backend
+    assert model_path == "/mock/cpu/model"
+
+
+@patch("local_transcriber.transcriber.get_backend")
+def test_transcribe_file_openvino_gpu_midstream_fallback(mock_get_backend):
+    """OpenVINO GPU ошибка при транскрипции → fallback на CPU."""
     ov_backend = _make_backend(
         transcribe_error=RuntimeError("OpenVINO inference error"),
     )
@@ -482,19 +507,19 @@ def test_transcribe_file_openvino_midstream_fallback(mock_get_backend):
     )
 
     def backend_for_device(device, **kwargs):
-        return ov_backend if device == "openvino" else cpu_backend
+        return ov_backend if device.startswith("openvino") else cpu_backend
 
     mock_get_backend.side_effect = backend_for_device
 
     with pytest.warns(UserWarning, match="Переключение на CPU"):
         tfr = _transcribe_file(
             model=MagicMock(),
-            actual_device="openvino",
+            actual_device="openvino-gpu",
             backend=ov_backend,
             model_path="/mock/ov/model",
             file_path=Path("test.mp3"),
             model_name="medium",
-            compute_type="int8",
+            compute_type="fp16",
         )
 
     assert tfr.actual_device == "cpu"
@@ -503,15 +528,15 @@ def test_transcribe_file_openvino_midstream_fallback(mock_get_backend):
 
 
 @patch("local_transcriber.transcriber.get_backend")
-def test_openvino_strict_device_no_fallback(mock_get_backend):
-    """strict_device=True + OpenVINO ошибка → raise."""
+def test_openvino_gpu_strict_device_no_fallback(mock_get_backend):
+    """strict_device=True + OpenVINO GPU ошибка → raise."""
     backend = _make_backend(
         create_model_error=RuntimeError("OpenVINO model load failed"),
     )
     mock_get_backend.return_value = backend
 
     with pytest.raises(RuntimeError, match="OpenVINO"):
-        load_model("medium", "openvino", "int8", strict_device=True)
+        load_model("medium", "openvino-gpu", "fp16", strict_device=True)
 
 
 @patch("local_transcriber.transcriber.get_backend")
@@ -523,21 +548,45 @@ def test_openvino_runtime_error_triggers_fallback(mock_get_backend):
     cpu_backend = _make_backend(model_path="/mock/cpu/model")
 
     def backend_for_device(device, **kwargs):
-        return ov_backend if device == "openvino" else cpu_backend
+        return ov_backend if device.startswith("openvino") else cpu_backend
 
     mock_get_backend.side_effect = backend_for_device
 
     with pytest.warns(UserWarning, match="Переключение на CPU"):
-        _, actual_device, _, _ = load_model("medium", "openvino", "int8")
+        _, actual_device, _, _ = load_model("medium", "openvino-cpu", "int8")
 
     assert actual_device == "cpu"
 
 
+@patch("local_transcriber.transcriber.get_backend")
+def test_load_model_resolves_openvino_gpu_device(mock_get_backend):
+    """load_model обновляет actual_device по backend.actual_ov_device."""
+    backend = _make_backend()
+    backend.actual_ov_device = "GPU"
+    mock_get_backend.return_value = backend
+
+    _, actual_device, _, _ = load_model("medium", "openvino-cpu", "int8")
+
+    assert actual_device == "openvino-gpu"
+
+
+@patch("local_transcriber.transcriber.get_backend")
+def test_load_model_resolves_openvino_cpu_device(mock_get_backend):
+    """load_model обновляет actual_device по backend.actual_ov_device."""
+    backend = _make_backend()
+    backend.actual_ov_device = "CPU"
+    mock_get_backend.return_value = backend
+
+    _, actual_device, _, _ = load_model("medium", "openvino-gpu", "fp16")
+
+    assert actual_device == "openvino-cpu"
+
+
 def test_ensure_model_available_openvino_default_compute_type():
-    """ensure_model_available(device='openvino') без compute_type не падает."""
+    """ensure_model_available(device='openvino-cpu') без compute_type не падает."""
     from local_transcriber.backends.openvino import OpenVINOBackend
 
-    backend = OpenVINOBackend(compute_type_explicit=True)
+    backend = OpenVINOBackend(ov_device="openvino-cpu", compute_type_explicit=True)
     # Проверяем что _resolve_repo работает с дефолтным compute_type для openvino (int8)
     repo, ct = backend._resolve_repo("medium", "int8")
     assert repo == "OpenVINO/whisper-medium-int8-ov"

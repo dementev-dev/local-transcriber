@@ -1,14 +1,16 @@
 import subprocess
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from local_transcriber.utils import (
+    _is_openvino_gpu_available,
     build_output_path,
     detect_device,
     expand_globs,
     get_gpu_name,
+    get_intel_gpu_name,
     has_existing_transcript,
     validate_input_file,
 )
@@ -55,26 +57,38 @@ def test_build_output_path_custom():
     assert result == custom
 
 
-def test_detect_device_explicit():
+def test_detect_device_explicit_passthrough():
+    """Явные device strings проходят без изменений."""
     assert detect_device("cpu") == "cpu"
     assert detect_device("cuda") == "cuda"
-    assert detect_device("openvino") == "openvino"
+    assert detect_device("openvino-gpu") == "openvino-gpu"
+    assert detect_device("openvino-cpu") == "openvino-cpu"
 
 
-def test_detect_device_auto_openvino():
-    """Нет nvidia-smi, есть openvino_genai, x86_64 → openvino."""
+def test_detect_device_auto_openvino_gpu():
+    """auto + нет nvidia-smi + есть OpenVINO GPU → openvino-gpu."""
     with (
         patch("local_transcriber.utils.shutil.which", return_value=None),
+        patch("local_transcriber.utils._is_openvino_gpu_available", return_value=True),
+    ):
+        assert detect_device("auto") == "openvino-gpu"
+
+
+def test_detect_device_auto_openvino_cpu():
+    """auto + нет nvidia-smi + есть OpenVINO, нет GPU → openvino-cpu."""
+    with (
+        patch("local_transcriber.utils.shutil.which", return_value=None),
+        patch("local_transcriber.utils._is_openvino_gpu_available", return_value=False),
         patch("local_transcriber.utils._is_openvino_available", return_value=True),
     ):
-        assert detect_device("auto") == "openvino"
+        assert detect_device("auto") == "openvino-cpu"
 
 
 def test_detect_device_cuda_over_openvino():
     """nvidia-smi доступен и openvino тоже → cuda побеждает."""
     with (
         patch("local_transcriber.utils.shutil.which", return_value="/usr/bin/nvidia-smi"),
-        patch("local_transcriber.utils._is_openvino_available", return_value=True),
+        patch("local_transcriber.utils._is_openvino_gpu_available", return_value=True),
     ):
         assert detect_device("auto") == "cuda"
 
@@ -83,9 +97,78 @@ def test_detect_device_auto_cpu_fallback():
     """Ни nvidia-smi, ни openvino → cpu."""
     with (
         patch("local_transcriber.utils.shutil.which", return_value=None),
+        patch("local_transcriber.utils._is_openvino_gpu_available", return_value=False),
         patch("local_transcriber.utils._is_openvino_available", return_value=False),
     ):
         assert detect_device("auto") == "cpu"
+
+
+def test_detect_device_openvino_resolves_to_gpu():
+    """--device openvino + GPU доступен → openvino-gpu."""
+    with patch("local_transcriber.utils._is_openvino_gpu_available", return_value=True):
+        assert detect_device("openvino") == "openvino-gpu"
+
+
+def test_detect_device_openvino_resolves_to_cpu():
+    """--device openvino + GPU недоступен → openvino-cpu."""
+    with patch("local_transcriber.utils._is_openvino_gpu_available", return_value=False):
+        assert detect_device("openvino") == "openvino-cpu"
+
+
+# === _is_openvino_gpu_available ===
+
+
+def test_is_openvino_gpu_available_true():
+    mock_core = MagicMock()
+    mock_core.return_value.available_devices = ["CPU", "GPU"]
+    with (
+        patch("local_transcriber.utils._is_openvino_available", return_value=True),
+        patch("local_transcriber.utils.Core", mock_core, create=True),
+    ):
+        # Need to patch the import inside the function
+        with patch.dict("sys.modules", {"openvino": MagicMock(Core=mock_core)}):
+            assert _is_openvino_gpu_available() is True
+
+
+def test_is_openvino_gpu_available_no_gpu():
+    mock_core = MagicMock()
+    mock_core.return_value.available_devices = ["CPU"]
+    with (
+        patch("local_transcriber.utils._is_openvino_available", return_value=True),
+        patch.dict("sys.modules", {"openvino": MagicMock(Core=mock_core)}),
+    ):
+        assert _is_openvino_gpu_available() is False
+
+
+def test_is_openvino_gpu_available_no_openvino():
+    """OpenVINO не установлен → False."""
+    with patch("local_transcriber.utils._is_openvino_available", return_value=False):
+        assert _is_openvino_gpu_available() is False
+
+
+def test_is_openvino_gpu_available_runtime_error():
+    """Runtime error от OpenVINO → False (fail-safe)."""
+    with (
+        patch("local_transcriber.utils._is_openvino_available", return_value=True),
+        patch.dict("sys.modules", {"openvino": MagicMock(Core=MagicMock(side_effect=RuntimeError("broken")))}),
+    ):
+        assert _is_openvino_gpu_available() is False
+
+
+# === get_intel_gpu_name ===
+
+
+def test_get_intel_gpu_name_success():
+    mock_core = MagicMock()
+    mock_core.return_value.get_property.return_value = "Intel(R) Arc(TM) 140T GPU (16GB) (iGPU)"
+    with patch.dict("sys.modules", {"openvino": MagicMock(Core=mock_core)}):
+        assert get_intel_gpu_name() == "Intel(R) Arc(TM) 140T GPU (16GB) (iGPU)"
+
+
+def test_get_intel_gpu_name_error():
+    """Ошибка → None (fail-safe)."""
+    with patch.dict("sys.modules", {"openvino": MagicMock(Core=MagicMock(side_effect=Exception("no gpu")))}):
+        assert get_intel_gpu_name() is None
 
 
 def test_get_gpu_name_no_nvidia_smi():

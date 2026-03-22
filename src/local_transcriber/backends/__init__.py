@@ -14,14 +14,16 @@ def get_backend(device: str, *, compute_type_explicit: bool = True) -> Backend:
     Импорты ленивые — бэкенд загружается только при запросе.
     compute_type_explicit: False если compute_type пришёл из дефолтов (влияет на fallback).
     """
-    if device == "openvino":
+    if device in ("openvino", "openvino-gpu", "openvino-cpu"):
         try:
             from .openvino import OpenVINOBackend
         except ImportError:
             raise ValueError(
                 "OpenVINO бэкенд недоступен. Установите: pip install openvino-genai"
             ) from None
-        return OpenVINOBackend(compute_type_explicit=compute_type_explicit)
+        return OpenVINOBackend(
+            ov_device=device, compute_type_explicit=compute_type_explicit
+        )
 
     # cuda, cpu и всё остальное → faster-whisper
     from .faster_whisper import FasterWhisperBackend

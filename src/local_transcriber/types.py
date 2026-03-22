@@ -18,7 +18,7 @@ class TranscribeResult:
     language: str
     language_probability: float
     duration: float  # seconds
-    device_used: str  # "cpu" / "cuda" / "openvino"
+    device_used: str  # "cpu" / "cuda" / "openvino-gpu" / "openvino-cpu"
 
 
 @dataclass

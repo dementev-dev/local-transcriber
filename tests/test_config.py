@@ -137,9 +137,39 @@ def test_load_config_openvino_device(tmp_path):
     assert result == {"device": "openvino"}
 
 
+def test_load_config_openvino_gpu_device(tmp_path):
+    config = tmp_path / "config.toml"
+    config.write_text('device = "openvino-gpu"\n')
+    result = load_config(config)
+    assert result == {"device": "openvino-gpu"}
+
+
+def test_load_config_openvino_cpu_device(tmp_path):
+    config = tmp_path / "config.toml"
+    config.write_text('device = "openvino-cpu"\n')
+    result = load_config(config)
+    assert result == {"device": "openvino-cpu"}
+
+
 def test_apply_device_defaults_openvino():
     defaults = {"model": "medium", "language": "ru", "device": "auto", "compute_type": "float32"}
     cli = {"model": None, "language": None, "device": None, "compute_type": None}
     result = apply_device_defaults(defaults, "openvino", cli, {})
+    assert result["model"] == "medium"
+    assert result["compute_type"] == "int8"
+
+
+def test_apply_device_defaults_openvino_gpu():
+    defaults = {"model": "medium", "language": "ru", "device": "auto", "compute_type": "float32"}
+    cli = {"model": None, "language": None, "device": None, "compute_type": None}
+    result = apply_device_defaults(defaults, "openvino-gpu", cli, {})
+    assert result["model"] == "medium"
+    assert result["compute_type"] == "int8"
+
+
+def test_apply_device_defaults_openvino_cpu():
+    defaults = {"model": "medium", "language": "ru", "device": "auto", "compute_type": "float32"}
+    cli = {"model": None, "language": None, "device": None, "compute_type": None}
+    result = apply_device_defaults(defaults, "openvino-cpu", cli, {})
     assert result["model"] == "medium"
     assert result["compute_type"] == "int8"

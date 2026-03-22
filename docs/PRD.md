@@ -47,8 +47,8 @@ transcribe <путь_к_файлу> [опции]
                     По умолчанию: auto (автодетект)
   --output, -o      Путь к выходному файлу
                     По умолчанию: <input_stem>-transcript.md
-  --device, -d      Устройство (auto|cpu|cuda)
-                    По умолчанию: auto (CUDA если доступен, иначе CPU)
+  --device, -d      Устройство (auto|cpu|cuda|openvino|openvino-gpu|openvino-cpu)
+                    По умолчанию: auto (CUDA → OpenVINO GPU → OpenVINO CPU → CPU)
   --compute-type    Тип вычислений (float16|int8|int8_float16|float32)
                     По умолчанию: int8 (универсален для GPU 4-8 GB и CPU)
   --verbose, -v     Подробный вывод (прогресс сегментов)

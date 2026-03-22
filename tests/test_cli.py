@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from typer.testing import CliRunner
 
-from local_transcriber.cli import app
+from local_transcriber.cli import _format_device_info, app
 from local_transcriber.transcriber import Segment, TranscribeFileResult, TranscribeResult
 
 runner = CliRunner()
@@ -788,3 +788,77 @@ def test_cli_batch_model_loaded_once(tmp_path):
 
     assert out.exit_code == 0
     mock_load_model.assert_called_once()
+
+
+# === _format_device_info tests ===
+
+
+def test_format_device_info_openvino_gpu():
+    with patch("local_transcriber.cli.get_intel_gpu_name", return_value="Intel(R) Arc(TM) 140T GPU"):
+        assert _format_device_info("openvino-gpu") == "OpenVINO (Intel(R) Arc(TM) 140T GPU)"
+
+
+def test_format_device_info_openvino_gpu_no_name():
+    """get_intel_gpu_name вернул None → fallback на 'Intel GPU'."""
+    with patch("local_transcriber.cli.get_intel_gpu_name", return_value=None):
+        assert _format_device_info("openvino-gpu") == "OpenVINO (Intel GPU)"
+
+
+def test_format_device_info_openvino_cpu():
+    assert _format_device_info("openvino-cpu") == "OpenVINO (CPU)"
+
+
+def test_format_device_info_openvino_legacy():
+    """Обратная совместимость: 'openvino' → OpenVINO (CPU)."""
+    assert _format_device_info("openvino") == "OpenVINO (CPU)"
+
+
+def test_format_device_info_cpu():
+    assert _format_device_info("cpu") == "CPU"
+
+
+def test_format_device_info_cuda():
+    with patch("local_transcriber.cli.get_gpu_name", return_value="RTX 4090"):
+        assert _format_device_info("cuda") == "CUDA (RTX 4090)"
+
+
+# === CLI with --device openvino-gpu ===
+
+
+def test_cli_openvino_gpu_happy_path(tmp_path):
+    audio = tmp_path / "test.mp3"
+    audio.write_bytes(b"fake")
+    result = _make_result(device_used="openvino-gpu")
+
+    patches = _single_patches(result=result, tmp_file=audio, actual_device="openvino-gpu")
+    with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
+        with patch("local_transcriber.cli.get_intel_gpu_name", return_value="Intel Arc 140T"):
+            out = runner.invoke(app, [str(audio), "--device", "openvino-gpu"])
+
+    assert out.exit_code == 0
+
+
+def test_cli_openvino_alias_resolves_to_gpu(tmp_path):
+    """--device openvino резолвится через detect_device в openvino-gpu."""
+    audio = tmp_path / "test.mp3"
+    audio.write_bytes(b"fake")
+    result = _make_result(device_used="openvino-gpu")
+    model = _make_model()
+    backend = _make_backend()
+    tfr = _make_tfr(result=result, model=model, actual_device="openvino-gpu", backend=backend)
+    mock_load_model = MagicMock(return_value=(model, "openvino-gpu", backend, "/models/medium"))
+
+    with (
+        patch("local_transcriber.cli.load_config", return_value={}),
+        patch("local_transcriber.cli.validate_input_file", return_value=audio),
+        patch("local_transcriber.cli.detect_device", return_value="openvino-gpu"),
+        patch("local_transcriber.cli.load_model", mock_load_model),
+        patch("local_transcriber.cli._transcribe_file", return_value=tfr),
+        patch("local_transcriber.cli.write_transcript"),
+        patch("local_transcriber.cli.get_intel_gpu_name", return_value="Intel Arc 140T"),
+    ):
+        out = runner.invoke(app, [str(audio), "--device", "openvino"])
+
+    assert out.exit_code == 0
+    # detect_device("openvino") resolved to "openvino-gpu", load_model receives it
+    assert mock_load_model.call_args[0][1] == "openvino-gpu"
