@@ -63,6 +63,41 @@ uv tool install --force git+https://github.com/dementev-dev/local-transcriber
 uv tool uninstall local-transcriber
 ```
 
+**Очистка моделей:**
+
+Модели кешируются в `~/.cache/huggingface/hub/` и могут занимать несколько гигабайт.
+На Windows без Developer Mode файлы копируются без симлинков — место удваивается.
+
+```bash
+# Linux / macOS — посмотреть размер кеша
+du -sh ~/.cache/huggingface/hub/models--*
+
+# Удалить все скачанные модели
+rm -rf ~/.cache/huggingface/hub/models--Systran--faster-whisper-*
+rm -rf ~/.cache/huggingface/hub/models--OpenVINO--whisper-*
+```
+
+```powershell
+# Windows
+dir "$env:USERPROFILE\.cache\huggingface\hub\models--*"
+
+# Удалить все скачанные модели
+Remove-Item -Recurse "$env:USERPROFILE\.cache\huggingface\hub\models--Systran--faster-whisper-*"
+Remove-Item -Recurse "$env:USERPROFILE\.cache\huggingface\hub\models--OpenVINO--whisper-*"
+```
+
+При следующем запуске нужная модель скачается заново.
+
+<details>
+<summary>Windows: ошибка WinError 1314 при первом запуске</summary>
+
+HuggingFace Hub использует симлинки для экономии места. На Windows без Developer Mode первая загрузка модели может упасть с ошибкой `WinError 1314`. Повторный запуск команды обычно помогает — HF Hub переключается на копирование файлов.
+
+Чтобы избежать проблемы и сэкономить место, включите Developer Mode:
+[Инструкция Microsoft](https://docs.microsoft.com/en-us/windows/apps/get-started/enable-your-device-for-development)
+
+</details>
+
 ## Использование
 
 ```bash
