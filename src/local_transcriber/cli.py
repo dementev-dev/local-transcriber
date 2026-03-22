@@ -21,6 +21,7 @@ from .utils import (
     detect_device,
     expand_globs,
     get_gpu_name,
+    get_intel_gpu_name,
     has_existing_transcript,
     validate_input_file,
 )
@@ -34,7 +35,10 @@ def _format_device_info(device_used: str) -> str:
     if device_used == "cuda":
         gpu_name = get_gpu_name()
         return f"CUDA ({gpu_name or 'Unknown GPU'})"
-    if device_used == "openvino":
+    if device_used == "openvino-gpu":
+        gpu_name = get_intel_gpu_name()
+        return f"OpenVINO ({gpu_name or 'Intel GPU'})"
+    if device_used in ("openvino", "openvino-cpu"):
         return "OpenVINO (CPU)"
     return "CPU"
 
@@ -51,11 +55,11 @@ def main(
     output: Path | None = typer.Option(None, "--output", "-o", help="Путь к выходному файлу"),
     device: str | None = typer.Option(
         None, "--device", "-d", show_default=False,
-        help="Устройство (auto|cpu|cuda|openvino) [по умолч.: auto]"
+        help="Устройство (auto|cpu|cuda|openvino|openvino-gpu|openvino-cpu) [по умолч.: auto]"
     ),
     compute_type: str | None = typer.Option(
         None, "--compute-type", show_default=False,
-        help="Тип вычислений [по умолч.: float16 (CUDA) / int8 (OpenVINO) / float32 (CPU)]"
+        help="Тип вычислений [по умолч.: float16 (CUDA) / int8 (OpenVINO GPU/CPU) / float32 (CPU)]"
     ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Подробный вывод"),
     force: bool = typer.Option(False, "--force", "-f", help="Перезаписать существующие транскрипты"),
@@ -151,6 +155,11 @@ def _run_single(
         f"Устройство: [bold]{actual_device}[/bold]  "
         f"Compute: [bold]{actual_ct}[/bold]"
     )
+    if actual_device == "openvino-gpu" and defaults["model"] != "large-v3":
+        console.print(
+            "Совет: --model large-v3 даёт лучшее качество на GPU (~2x дольше)",
+            style="dim",
+        )
 
     with Status("Подготавливаю запуск...", console=console) as status:
         tfr = _transcribe_file(
@@ -248,6 +257,12 @@ def _run_batch(
         on_status=lambda msg: console.print(msg), strict_device=strict,
         compute_type_explicit=compute_type_explicit,
     )
+
+    if actual_device == "openvino-gpu" and defaults["model"] != "large-v3":
+        console.print(
+            "Совет: --model large-v3 даёт лучшее качество на GPU (~2x дольше)",
+            style="dim",
+        )
 
     if actual_device != resolved_device:
         if requested_device == "auto":

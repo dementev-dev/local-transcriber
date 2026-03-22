@@ -16,16 +16,23 @@ SUPPORTED_EXTENSIONS = {
 def detect_device(requested: str = "auto") -> str:
     """Определяет устройство для вычислений.
 
-    При ``requested="auto"`` проверяет: CUDA → OpenVINO → CPU.
-    Явное значение возвращается как есть.
+    При ``requested="auto"`` проверяет: CUDA → OpenVINO GPU → OpenVINO CPU → CPU.
+    ``"openvino"`` — алиас для авто-детекта внутри OpenVINO (GPU если доступен, иначе CPU).
+    Возвращает всегда конкретное значение (не абстрактный ``"openvino"``).
     """
-    if requested != "auto":
-        return requested
-    if shutil.which("nvidia-smi") is not None:
-        return "cuda"
-    if _is_openvino_available():
-        return "openvino"
-    return "cpu"
+    if requested == "auto":
+        if shutil.which("nvidia-smi") is not None:
+            return "cuda"
+        if _is_openvino_gpu_available():
+            return "openvino-gpu"
+        if _is_openvino_available():
+            return "openvino-cpu"
+        return "cpu"
+    if requested == "openvino":
+        if _is_openvino_gpu_available():
+            return "openvino-gpu"
+        return "openvino-cpu"
+    return requested
 
 
 def _is_openvino_available() -> bool:
@@ -38,6 +45,32 @@ def _is_openvino_available() -> bool:
         return True
     except ImportError:
         return False
+
+
+def _is_openvino_gpu_available() -> bool:
+    """Проверяет доступность Intel GPU через OpenVINO.
+
+    Сохраняет x86/AMD64 gate и глотает все ошибки импорта/runtime.
+    """
+    if not _is_openvino_available():
+        return False
+    try:
+        from openvino import Core
+
+        return "GPU" in Core().available_devices
+    except Exception:
+        return False
+
+
+def get_intel_gpu_name() -> str | None:
+    """Возвращает название Intel GPU через OpenVINO (для метаданных транскрипта)."""
+    try:
+        from openvino import Core
+
+        name = Core().get_property("GPU", "FULL_DEVICE_NAME")
+        return name if name else None
+    except Exception:
+        return None
 
 
 def get_gpu_name() -> str | None:

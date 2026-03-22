@@ -8,7 +8,7 @@ transcribe meeting.mp4
 ```
 
 - **Полностью локально** — данные не покидают машину
-- **Авто-ускорение** — NVIDIA CUDA, OpenVINO (Intel/AMD CPU) или CPU fallback
+- **Авто-ускорение** — NVIDIA CUDA, Intel GPU (OpenVINO), OpenVINO CPU или CPU fallback
 - **Батч-режим** — обработка нескольких файлов за один вызов
 - **Markdown с таймкодами** — удобен для суммаризации ИИ
 - **Аудио и видео** — mp3, wav, mp4, mkv и [другие форматы](#поддерживаемые-форматы)
@@ -32,7 +32,8 @@ uv tool install git+https://github.com/dementev-dev/local-transcriber
 
 **3. Ускорение (ставится автоматически):**
 
-- **OpenVINO** (Intel/AMD x86 CPU): ставится автоматически на Linux и Windows — ускорение в 2-4 раза
+- **Intel GPU** (Arc, встроенная графика): работает через OpenVINO — ускорение в ~2x vs CPU
+- **OpenVINO** (Intel/AMD x86 CPU): ставится автоматически на Linux и Windows — ускорение в 2-4x
 - **NVIDIA CUDA** (GPU): если есть GPU — транскрипция в 5-10× быстрее
   - **Windows**: `winget install -e --id Nvidia.CUDA --version 12.9` (от администратора), перезапустить терминал
   - **Linux / WSL2**: работает из коробки (нужен только драйвер: `nvidia-smi`)
@@ -107,8 +108,11 @@ transcribe meeting.mp4
 # Указать язык
 transcribe lecture.mp3 --language en
 
-# Максимальное качество на GPU
+# Максимальное качество на NVIDIA GPU
 transcribe podcast.wav --model large-v3 --compute-type float16
+
+# Максимальное качество на Intel GPU
+transcribe podcast.wav --model large-v3 --device openvino-gpu
 
 # Сохранить в конкретный файл
 transcribe interview.m4a --output result.md
@@ -141,8 +145,8 @@ transcribe *.mp4 --force
 | `--model` | `-m` | `medium` | Модель Whisper |
 | `--language` | `-l` | `ru` | Язык (ru, en, auto и др.) |
 | `--output` | `-o` | `<файл>-transcript.md` | Путь к выходному файлу |
-| `--device` | `-d` | `auto` | Устройство (auto, cpu, cuda, openvino) |
-| `--compute-type` | — | float16 (CUDA) / int8 (OpenVINO) / float32 (CPU) | Тип вычислений |
+| `--device` | `-d` | `auto` | Устройство (auto, cpu, cuda, openvino, openvino-gpu, openvino-cpu) |
+| `--compute-type` | — | float16 (CUDA) / int8 (OpenVINO GPU/CPU) / float32 (CPU) | Тип вычислений |
 | `--force` | `-f` | — | Перезаписать существующие транскрипты |
 | `--verbose` | `-v` | — | Подробный вывод |
 
@@ -152,12 +156,14 @@ transcribe *.mp4 --force
 |---|---|---|---|
 | CPU | ✅ | ✅ | ✅ |
 | OpenVINO (x86 CPU) | ✅ авто | — | ✅ авто |
+| OpenVINO (Intel GPU) | ✅ авто | — | ✅ авто |
 | GPU (NVIDIA) | ✅ авто | — | ✅ (нужен CUDA 12) |
 
 <details>
 <summary>Linux / WSL2</summary>
 
-- GPU работает из коробки — cuBLAS ставится автоматически как зависимость
+- **Intel GPU** (Arc, встроенная графика) работает из коробки через OpenVINO
+- **NVIDIA GPU** работает из коробки — cuBLAS ставится автоматически как зависимость
 - Нужен только драйвер NVIDIA (проверка: `nvidia-smi`)
 - На ARM (aarch64) cuBLAS через pip недоступен — нужен системный CUDA toolkit
 
@@ -175,7 +181,8 @@ transcribe *.mp4 --force
 <summary>Windows</summary>
 
 - CPU работает из коробки
-- Для GPU нужен **CUDA 12** (ctranslate2 4.7 не совместим с CUDA 11 и 13):
+- **Intel GPU** (Arc, встроенная графика) работает из коробки через OpenVINO
+- Для **NVIDIA GPU** нужен **CUDA 12** (ctranslate2 4.7 не совместим с CUDA 11 и 13):
   ```
   winget install -e --id Nvidia.CUDA --version 12.9
   ```
@@ -202,17 +209,18 @@ language = "en"
 
 Дефолты зависят от устройства:
 
-| Параметр | CUDA | OpenVINO | CPU |
-|----------|------|----------|-----|
-| model | medium | medium | medium |
-| compute_type | float16 | int8 | float32 |
-| language | ru | ru | ru |
+| Параметр | CUDA | OpenVINO (GPU) | OpenVINO (CPU) | CPU |
+|----------|------|----------------|----------------|-----|
+| model | medium | medium | medium | medium |
+| compute_type | float16 | int8 | int8 | float32 |
+| language | ru | ru | ru | ru |
 
 ## Модели и GPU
 
 Рекомендации:
 - **По умолчанию:** `medium` — хороший баланс скорости и качества
-- **Макс. качество:** `large-v3` + `--compute-type float16` (GPU)
+- **Макс. качество (NVIDIA):** `large-v3` + `--compute-type float16`
+- **Макс. качество (Intel GPU):** `large-v3` + `--device openvino-gpu`
 - **Быстрый тест:** `tiny` — для проверки пайплайна
 
 <details>

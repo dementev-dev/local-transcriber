@@ -36,6 +36,12 @@ def load_model(
     try:
         _notify_status(on_status, f"Инициализирую модель на {device}...")
         model = backend.create_model(model_path, device, compute_type)
+        # Резолвим actual_device по реальному OpenVINO device
+        ov_dev = getattr(backend, "actual_ov_device", None)
+        if ov_dev == "GPU" and actual_device != "openvino-gpu":
+            actual_device = "openvino-gpu"
+        elif ov_dev == "CPU" and actual_device.startswith("openvino") and actual_device != "openvino-cpu":
+            actual_device = "openvino-cpu"
     except (RuntimeError, ValueError) as exc:
         if device != "cpu" and _is_backend_error(exc, device):
             if strict_device:
@@ -157,7 +163,7 @@ def _is_backend_error(exc: BaseException, device: str) -> bool:
     """Определяет, связана ли ошибка с конкретным бэкендом (а не с пользовательскими данными)."""
     if device in ("cuda", "cpu"):
         return _is_cuda_error(exc)
-    if device == "openvino":
+    if device.startswith("openvino"):
         return _is_openvino_error(exc)
     return False
 
