@@ -200,7 +200,7 @@ def _run_single(
     write_transcript(content, output_path)
 
     elapsed = time.monotonic() - start
-    console.print(f"Транскрипт сохранён: [bold]{output_path}[/bold]", style="green")
+    console.print(f"Транскрипт сохранён: \"{output_path}\"", style="green")
     console.print(f"  Сегментов: {len(result.segments)}  Время: {elapsed:.1f}с")
 
 

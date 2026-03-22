@@ -106,7 +106,8 @@ class OpenVINOBackend:
         if language:
             kwargs["language"] = f"<|{language}|>"
 
-        duration_str = f"{int(duration // 60):02d}:{int(duration % 60):02d}"
+        dur_min = int(duration // 60)
+        duration_str = f"{dur_min} мин" if dur_min > 0 else f"{int(duration)} сек"
         pcm_list = raw_speech.tolist()
         result = _generate_with_progress(model, pcm_list, kwargs, duration_str, on_status)
 
@@ -200,7 +201,7 @@ def _generate_with_progress(
     while thread.is_alive():
         elapsed = int(time.monotonic() - start)
         elapsed_str = f"{elapsed // 60:02d}:{elapsed % 60:02d}"
-        _notify(on_status, f"Транскрибирую (OpenVINO)... {elapsed_str} / {duration_str} аудио")
+        _notify(on_status, f"Транскрибирую {duration_str} аудио (OpenVINO)... прошло {elapsed_str}")
         thread.join(timeout=1.0)
 
     if error_box[0] is not None:
