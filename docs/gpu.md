@@ -1,10 +1,78 @@
-# GPU и CUDA
+# Ускорение транскрипции
 
 ## Режимы `--device`
 
-- `auto` (по умолчанию) — выберет GPU если `nvidia-smi` доступен, иначе CPU
-- `cuda` — строго GPU, ошибка если недоступен (без silent fallback)
-- `cpu` — строго CPU
+- `auto` (по умолчанию) — CUDA → OpenVINO → CPU (первый доступный)
+- `cuda` — строго NVIDIA GPU, ошибка если недоступен
+- `openvino` — OpenVINO на CPU (ускорение 2-4x на x86)
+- `cpu` — строго CPU (faster-whisper/CTranslate2)
+
+## Какой бэкенд на каком оборудовании
+
+| Оборудование | Рекомендуемый `--device` | Бэкенд | Ожидаемая скорость |
+|---|---|---|---|
+| NVIDIA GPU (6+ GB VRAM) | `auto` / `cuda` | faster-whisper (CTranslate2) | 7-19x реалтайм |
+| Intel/AMD x86 CPU | `auto` / `openvino` | OpenVINO GenAI | 3-6x реалтайм* |
+| Любой CPU (fallback) | `cpu` | faster-whisper (CTranslate2) | ~1.5x реалтайм |
+| Apple Silicon (macOS) | `cpu` | faster-whisper (CTranslate2) | ~2x реалтайм |
+
+\* По результатам тестирования на Intel и AMD CPU. Реальная скорость зависит от CPU и модели.
+
+## OpenVINO
+
+OpenVINO ускоряет inference на x86 процессорах (Intel и AMD) через оптимизированные инструкции
+(AVX2, AVX-512, VNNI, AMX). Ставится автоматически на Linux и Windows (x86_64/AMD64).
+
+- **Модели**: предконвертированные из [HuggingFace](https://huggingface.co/OpenVINO) (int8/fp16)
+- **Дефолт**: `medium` + `int8` (для `large-v3` автоматически выбирается `fp16`)
+- **Аудиодекодирование**: через PyAV (бандлит FFmpeg), системный ffmpeg не нужен
+
+### Доступные OpenVINO модели
+
+| Модель | int8 | fp16 |
+|--------|------|------|
+| tiny | OpenVINO/whisper-tiny-int8-ov | — |
+| base | — | OpenVINO/whisper-base-fp16-ov |
+| small | OpenVINO/whisper-small-int8-ov | — |
+| medium | OpenVINO/whisper-medium-int8-ov | — |
+| large-v3 | OpenVINO/whisper-large-v3-int8-ov | OpenVINO/whisper-large-v3-fp16-ov |
+
+### Результаты тестирования OpenVINO
+
+Реальные записи рабочих созвонов (русский, техтермины: SQL, PostgreSQL, LDAP, DLP и др.).
+
+**Скорость (эталонный файл 16 мин, OpenVINO, medium int8):**
+
+| CPU | medium int8 | large-v3 fp16 | CPU float32 (baseline) |
+|---|---|---|---|
+| Intel Ultra 7 255H | **122с** | **411с** | — |
+| AMD Ryzen 7 8845H | 185с | 416с | 734с |
+| Intel i7 (WSL2) | 171-205с | — | 658с |
+
+**Ускорение vs CPU float32:** **3-6x** в зависимости от CPU.
+
+**OpenVINO small int8 (Intel i7 WSL2):**
+
+| Файл | small int8 | medium int8 |
+|---|---|---|
+| 16 мин | 93с | 171с |
+| 42 мин | 153с (~16x реалтайм) | 413с |
+
+**Качество (сравнение на одном файле, 16 мин, OpenVINO int8/fp16, Intel CPU):**
+
+| | small int8 | medium int8 | large-v3 fp16 |
+|---|---|---|---|
+| Время (16 мин) | **93с** | 171с | 416с |
+| Время (42 мин) | **153с** | 413с | — |
+| Ключевые слова | искажения ("бокап", "рецензия") | единичные ляпы | корректно |
+| Пунктуация | слабая | базовая | хорошая |
+| Галлюцинации | нет | нет | нет |
+
+### Рекомендации по выбору модели
+
+- **small** — для быстрого сканирования большого объёма видео по маске (`*.mp4`). Ошибки в отдельных словах; для обработки ИИ (МОМ, конспект) рискованно — "рецензия" вместо "лицензия" может исказить смысл.
+- **medium** — для повседневного использования и обработки ИИ. Ключевые термины верные, единичные ляпы не влияют на смысл конспекта. Оптимальный баланс скорости и качества.
+- **large-v3** — для важных записей, где нужна дословная точность. Лучшая пунктуация и связность. На OpenVINO (416с) быстрее, чем medium на чистом CPU (734с) — лучшее качество при выше скорости.
 
 ## Настройка по платформам
 
@@ -17,12 +85,10 @@
 
 ### Windows
 
-Нужен системный CUDA toolkit:
+Нужен системный **CUDA 12** (ctranslate2 4.7 не совместим с CUDA 11 и 13):
 
 ```bash
-choco install cuda
-# или
-winget install -e --id Nvidia.CUDA   # требует запуска от имени администратора
+winget install -e --id Nvidia.CUDA --version 12.9   # требует запуска от имени администратора
 ```
 
 После установки перезапустите терминал.
@@ -43,10 +109,11 @@ winget install -e --id Nvidia.CUDA   # требует запуска от име
 |-------------|-------------|-------------|---------------|
 | GPU + medium float16 | ~35с | ~133с | ~19x реалтайм |
 | GPU + large-v3 float16 | ~90с | ~350с | ~7x реалтайм |
-| CPU + medium float32 | 613с (10 мин) | ~26 мин* | ~1.5x реалтайм |
-| CPU + large-v3 int8 | 839с (14 мин) | ~37 мин* | ~1:1 реалтайм |
-
-*Оценка на основе пропорции.
+| **OpenVINO + small int8** | **93с** | **153с** | **~10-16x реалтайм** |
+| **OpenVINO + medium int8** | **171-205с** | **413с** | **~4-6x реалтайм** |
+| **OpenVINO + large-v3 fp16** | **416с** | — | **~2.3x реалтайм** |
+| CPU + medium float32 | 658с (11 мин) | ~26 мин | ~1.5x реалтайм |
+| CPU + large-v3 int8 | 839с (14 мин) | ~37 мин | ~1:1 реалтайм |
 
 ## Результаты тестирования качества
 
@@ -77,11 +144,9 @@ SQL, PostgreSQL, Greenplum, Airflow, ClickHouse, Docker, CDR, GTP, MAP).
 
 ### Windows: ошибка при загрузке модели на GPU
 
-GPU на Windows требует CUDA toolkit (включает cuBLAS). Установите:
+GPU на Windows требует **CUDA 12** (ctranslate2 4.7 не совместим с CUDA 11 и 13). Установите:
 ```bash
-choco install cuda
-# или
-winget install -e --id Nvidia.CUDA
+winget install -e --id Nvidia.CUDA --version 12.9   # требует запуска от имени администратора
 ```
 После установки перезапустите терминал.
 

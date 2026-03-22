@@ -1,65 +1,18 @@
-"""Обёртка над faster-whisper: загрузка моделей, транскрипция, CUDA fallback."""
+"""Оркестрация транскрипции: выбор бэкенда, загрузка модели, fallback."""
 
 import warnings
 from collections.abc import Callable
-from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
-# Должен быть ДО импорта faster_whisper / ctranslate2
-from local_transcriber._cuda_bootstrap import ensure_cublas_loadable
+from local_transcriber.backends import get_backend
 
-ensure_cublas_loadable()
-
-from faster_whisper import WhisperModel  # noqa: E402
-from huggingface_hub import snapshot_download
-from huggingface_hub.errors import LocalEntryNotFoundError
-
-MODEL_REPOS = {
-    "tiny": "Systran/faster-whisper-tiny",
-    "base": "Systran/faster-whisper-base",
-    "small": "Systran/faster-whisper-small",
-    "medium": "Systran/faster-whisper-medium",
-    "large-v3": "Systran/faster-whisper-large-v3",
-}
-
-# allow — фильтр для snapshot_download (какие файлы скачивать из репозитория);
-# required — для валидации (что обязано быть после скачивания/в локальной модели)
-MODEL_ALLOW_PATTERNS = [
-    "config.json",
-    "preprocessor_config.json",
-    "model.bin",
-    "tokenizer.json",
-    "vocabulary.*",
-]
-
-MODEL_REQUIRED_FILES = [
-    "config.json",
-    "model.bin",
-    "tokenizer.json",
-]
-
-
-@dataclass
-class Segment:
-    start: float  # seconds
-    end: float  # seconds
-    text: str
-
-
-@dataclass
-class TranscribeResult:
-    segments: list[Segment]
-    language: str
-    language_probability: float
-    duration: float  # seconds
-    device_used: str  # "cpu" / "cuda"
-
-
-@dataclass
-class TranscribeFileResult:
-    result: TranscribeResult
-    model: WhisperModel
-    actual_device: str
+# Re-export из types.py для обратной совместимости
+from local_transcriber.types import (  # noqa: F401
+    Segment,
+    TranscribeFileResult,
+    TranscribeResult,
+)
 
 
 def load_model(
@@ -68,15 +21,23 @@ def load_model(
     compute_type: str,
     on_status: Callable[[str], None] | None = None,
     strict_device: bool = False,
-) -> tuple[WhisperModel, str]:
-    """Загружает модель с CUDA-фолбеком. Возвращает (model, actual_device)."""
+    compute_type_explicit: bool = False,
+) -> tuple[Any, str, Any, str]:
+    """Загружает модель: ensure + create с fallback.
+
+    Возвращает (model, actual_device, backend, model_path).
+    compute_type_explicit: True если пользователь явно указал --compute-type.
+    """
+    backend = get_backend(device, compute_type_explicit=compute_type_explicit)
     actual_device = device
+
+    model_path = backend.ensure_model_available(model_name, compute_type, on_status)
+
     try:
         _notify_status(on_status, f"Инициализирую модель на {device}...")
-        model = _create_model(model_name, device, compute_type)
+        model = backend.create_model(model_path, device, compute_type)
     except (RuntimeError, ValueError) as exc:
-        # strict — пользователь явно указал устройство, fallback запрещён
-        if device != "cpu" and _is_cuda_error(exc):
+        if device != "cpu" and _is_backend_error(exc, device):
             if strict_device:
                 raise
             warnings.warn(
@@ -85,16 +46,21 @@ def load_model(
                 stacklevel=2,
             )
             actual_device = "cpu"
+            backend = get_backend("cpu")
+            model_path = backend.ensure_model_available(model_name, compute_type, on_status)
             _notify_status(on_status, "Инициализирую модель на cpu...")
-            model = _create_model(model_name, "cpu", compute_type)
+            model = backend.create_model(model_path, "cpu", compute_type)
         else:
             raise
-    return model, actual_device
+
+    return model, actual_device, backend, model_path
 
 
 def _transcribe_file(
-    model: WhisperModel,
+    model: Any,
     actual_device: str,
+    backend: Any,
+    model_path: str,
     file_path: Path,
     model_name: str,
     compute_type: str,
@@ -103,39 +69,40 @@ def _transcribe_file(
     on_status: Callable[[str], None] | None = None,
     strict_device: bool = False,
 ) -> TranscribeFileResult:
-    """Транскрибирует один файл. При mid-stream CUDA fallback перезагружает модель."""
+    """Транскрибирует один файл. При mid-stream fallback перезагружает модель."""
     lang_arg = language if language and language != "auto" else None
 
     try:
         _notify_status(on_status, "Транскрибирую...")
-        segments, info = _run_transcription(model, file_path, lang_arg, on_segment, on_status)
+        result = backend.transcribe(model, file_path, lang_arg, on_segment, on_status)
+        result.device_used = actual_device
     except (RuntimeError, ValueError) as exc:
-        # Mid-stream fallback: GPU может упасть с OOM уже во время транскрипции,
-        # поэтому перезагружаем модель на CPU и начинаем сначала
-        if actual_device != "cpu" and _is_cuda_error(exc):
+        if actual_device != "cpu" and _is_backend_error(exc, actual_device):
             if strict_device:
                 raise
             warnings.warn(
-                f"CUDA ошибка при транскрипции: {exc}. "
+                f"Ошибка при транскрипции на {actual_device}: {exc}. "
                 "Переключение на CPU и повтор.",
                 stacklevel=2,
             )
             actual_device = "cpu"
+            backend = get_backend("cpu")
+            model_path = backend.ensure_model_available(model_name, compute_type, on_status)
             _notify_status(on_status, "Инициализирую модель на cpu...")
-            model = _create_model(model_name, "cpu", compute_type)
+            model = backend.create_model(model_path, "cpu", compute_type)
             _notify_status(on_status, "Транскрибирую...")
-            segments, info = _run_transcription(model, file_path, lang_arg, on_segment, on_status)
+            result = backend.transcribe(model, file_path, lang_arg, on_segment, on_status)
+            result.device_used = actual_device
         else:
             raise
 
-    result = TranscribeResult(
-        segments=segments,
-        language=info.language,
-        language_probability=info.language_probability,
-        duration=info.duration,
-        device_used=actual_device,
+    return TranscribeFileResult(
+        result=result,
+        model=model,
+        actual_device=actual_device,
+        backend=backend,
+        model_path=model_path,
     )
-    return TranscribeFileResult(result=result, model=model, actual_device=actual_device)
 
 
 def transcribe(
@@ -149,9 +116,13 @@ def transcribe(
     strict_device: bool = False,
 ) -> TranscribeResult:
     """High-level API: загрузка модели + транскрипция за один вызов."""
-    model, actual_device = load_model(model_name, device, compute_type, on_status, strict_device)
+    model, actual_device, backend, model_path = load_model(
+        model_name, device, compute_type, on_status, strict_device,
+        compute_type_explicit=True,  # Python API — caller explicitly chose compute_type
+    )
     tfr = _transcribe_file(
-        model, actual_device, file_path, model_name, compute_type,
+        model, actual_device, backend, model_path,
+        file_path, model_name, compute_type,
         language, on_segment, on_status, strict_device,
     )
     return tfr.result
@@ -159,127 +130,49 @@ def transcribe(
 
 def ensure_model_available(
     model_name: str,
+    device: str = "cpu",
+    compute_type: str | None = None,
     on_status: Callable[[str], None] | None = None,
 ) -> str:
-    """Резолвит alias модели в repo_id и гарантирует наличие файлов.
+    """Публичный helper: гарантирует наличие модели для указанного бэкенда."""
+    from local_transcriber.config import DEVICE_DEFAULTS, HARDCODED_DEFAULTS
 
-    Стратегия: cache-first (``local_files_only=True``), затем download.
-    Два вызова ``snapshot_download`` — чтобы не лезть в сеть, если модель уже в кэше.
-    """
-    local_path = Path(model_name).expanduser()
-    if local_path.is_dir():
-        _validate_model_dir(local_path)
-        return str(local_path)
-
-    repo_id = _resolve_model_repo(model_name)
-
-    try:
-        _notify_status(on_status, f"Проверяю кэш модели {model_name}...")
-        cached_path = Path(_snapshot_download(repo_id, local_files_only=True))
-        _validate_model_dir(cached_path)
-        return str(cached_path)
-    except LocalEntryNotFoundError:
-        pass
-    except ValueError:
-        _notify_status(on_status, f"Кэш модели {model_name} неполный, докачиваю...")
-
-    _notify_status(on_status, f"Скачиваю модель {model_name} из Hugging Face...")
-    downloaded_path = Path(_snapshot_download(repo_id, local_files_only=False))
-    _validate_model_dir(downloaded_path)
-    return str(downloaded_path)
-
-
-def _run_transcription(model, file_path, lang_arg, on_segment, on_status=None):
-    """Run model.transcribe and iterate segments. Returns (segments, info)."""
-    segment_generator, info = model.transcribe(str(file_path), language=lang_arg)
-    total_duration = info.duration
-    segments: list[Segment] = []
-    for raw_seg in segment_generator:
-        seg = Segment(start=raw_seg.start, end=raw_seg.end, text=raw_seg.text)
-        if on_segment is not None:
-            on_segment(seg)
-        segments.append(seg)
-        _notify_status(
-            on_status,
-            f"Транскрибирую... {_fmt_time(seg.end)} / {_fmt_time(total_duration)}"
-            f"  [{len(segments)} сегм.]",
-        )
-    return segments, info
-
-
-def _create_model(model_name: str, device: str, compute_type: str):
-    try:
-        return WhisperModel(model_name, device=device, compute_type=compute_type)
-    except ImportError as exc:
-        # WhisperModel при инициализации может загружать файлы через HF Hub;
-        # если в системе настроен SOCKS proxy, но socksio не установлен,
-        # HF Hub бросает ImportError — оборачиваем в понятное сообщение
-        if _is_missing_socksio_error(exc):
-            raise RuntimeError(
-                "Обнаружен SOCKS proxy, но не установлена зависимость `socksio`, "
-                "нужная для загрузки модели из Hugging Face через proxy. "
-                "Обновите окружение: `uv sync`."
-            ) from exc
-        raise
+    if compute_type is None:
+        device_defs = DEVICE_DEFAULTS.get(device, {})
+        compute_type = device_defs.get("compute_type", HARDCODED_DEFAULTS["compute_type"])
+        explicit = False
+    else:
+        explicit = True
+    backend = get_backend(device, compute_type_explicit=explicit)
+    return backend.ensure_model_available(model_name, compute_type, on_status)
 
 
 def _is_cuda_error(exc: BaseException) -> bool:
+    """Проверка CUDA ошибок — используется в cli.py для Windows-диагностики."""
     msg = str(exc).lower()
     return any(k in msg for k in ("cuda", "cublas", "cudnn", "out of memory"))
 
 
-def _is_missing_socksio_error(exc: BaseException) -> bool:
-    msg = str(exc).lower()
-    return "socks proxy" in msg and "socksio" in msg
+def _is_backend_error(exc: BaseException, device: str) -> bool:
+    """Определяет, связана ли ошибка с конкретным бэкендом (а не с пользовательскими данными)."""
+    if device in ("cuda", "cpu"):
+        return _is_cuda_error(exc)
+    if device == "openvino":
+        return _is_openvino_error(exc)
+    return False
 
 
-def _fmt_time(seconds: float) -> str:
-    m, s = divmod(int(seconds), 60)
-    h, m = divmod(m, 60)
-    return f"{h}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
+def _is_openvino_error(exc: BaseException) -> bool:
+    """Проверка ошибок OpenVINO runtime.
+
+    OpenVINO runtime кидает RuntimeError с разнообразными сообщениями
+    (openvino, ov_, inference, plugins, src/...). Пользовательские ошибки
+    (файл не найден, неверный формат) приходят как FileNotFoundError/ValueError
+    и не попадают сюда. Поэтому для RuntimeError считаем это backend failure.
+    """
+    return isinstance(exc, RuntimeError)
 
 
 def _notify_status(on_status: Callable[[str], None] | None, message: str) -> None:
     if on_status is not None:
         on_status(message)
-
-
-def _resolve_model_repo(model_name: str) -> str:
-    if "/" in model_name:
-        return model_name
-
-    repo_id = MODEL_REPOS.get(model_name)
-    if repo_id is None:
-        expected = ", ".join(MODEL_REPOS)
-        raise ValueError(f"Неподдерживаемая модель '{model_name}'. Ожидалось одно из: {expected}")
-
-    return repo_id
-
-
-def _snapshot_download(repo_id: str, local_files_only: bool) -> str:
-    try:
-        return snapshot_download(
-            repo_id,
-            local_files_only=local_files_only,
-            allow_patterns=MODEL_ALLOW_PATTERNS,
-        )
-    except ImportError as exc:
-        if _is_missing_socksio_error(exc):
-            raise RuntimeError(
-                "Обнаружен SOCKS proxy, но не установлена зависимость `socksio`, "
-                "нужная для загрузки модели из Hugging Face через proxy. "
-                "Обновите окружение: `uv sync`."
-            ) from exc
-        raise
-
-
-def _validate_model_dir(model_dir: Path) -> None:
-    missing = [
-        filename for filename in MODEL_REQUIRED_FILES if not (model_dir / filename).exists()
-    ]
-    if not any(model_dir.glob("vocabulary.*")):
-        missing.append("vocabulary.*")
-
-    if missing:
-        missing_str = ", ".join(missing)
-        raise ValueError(f"Неполная локальная модель в '{model_dir}': отсутствуют {missing_str}")
