@@ -154,10 +154,105 @@ cmake --build build --config Release -j$(nproc)
 # -> build/bin/whisper-cli
 ```
 
-## Рекомендуемый план
+## Прототип: whisper.cpp в WSL2 (2026-03-23)
 
-1. **Прототип в WSL** — собрать whisper.cpp с Vulkan, прогнать тестовый файл
-2. **Бенчмарк** на том же тестовом файле — сравнить скорость и качество GGML vs CTranslate2
-3. **Решение** о включении в основной проект по результатам бенчмарка
-4. Если ОК — оформить как бэкенд `backends/whisper_cpp.py`
-5. NPU — отложить до XDNA 2 или до появления pip-пакета от AMD
+### Сборка
+
+whisper.cpp собран с `-DGGML_VULKAN=ON`, но **Vulkan GPU не обнаружен**:
+
+```
+ggml_vulkan: No devices found.
+whisper_backend_init_gpu: no GPU found
+```
+
+**Причина**: WSL2 не предоставляет Vulkan-доступ к AMD GPU.
+- `/dev/dxg` есть (DirectX 12 paravirtualization), но **dozen** (Vulkan-over-D3D12) драйвер
+  отсутствует в текущей mesa (25.2.8)
+- RADV (нативный Vulkan) не работает — нет `/dev/dri/renderD128`
+- Единственный Vulkan-девайс — `llvmpipe` (CPU-эмуляция), whisper.cpp его игнорирует
+
+Whisper.cpp отработал **на CPU** (4 потока, AVX512).
+
+### Скорость (CPU fallback)
+
+| Параметр | Значение |
+|----------|----------|
+| Модель | ggml-medium.bin (f16, 1533 МБ) |
+| Аудио | 14:41 (881с), русский, 3 участника |
+| Общее время | **886с** |
+| encode | 368с (32 прохода, 11.5с/проход) |
+| batchd (decode) | 424с |
+| Потоки | 4 / 16 |
+| Beam search | 5 beams + best of 5 |
+
+Сравнение с бенчмарком (тот же аудиофайл):
+
+| Конфигурация | Время, с |
+|---|---|
+| OpenVINO fp16 (medium) | ~240 |
+| CT2 int8_float32 (medium) | ~599 |
+| CT2 float32 (medium) | ~881 |
+| **whisper.cpp CPU (medium f16)** | **~886** |
+
+На CPU whisper.cpp ≈ CTranslate2 float32. Без GPU ускорения нет.
+
+### Качество (сравнение с бенчмарком)
+
+#### Техтермины
+
+| Термин | whisper.cpp (CPU) | CT2 f32 | CT2 int8f32 |
+|--------|------------------|---------|-------------|
+| DWH | ✅ DWH | ⚠️ ДВХ | ✅ DWH |
+| Teradata | ✅ TeraData | ⚠️ Тирадату | ✅ Teradata |
+| NiFi | ⚠️ Найфай/Найфаю | ⚠️ Найфай | ✅ NiFi |
+| FineBI | ✅ fineBI/FNBI | ✅ FNBI | ✅ finebi/FNBI |
+| Alation | ✅ Allation | ✅ Allation | ✅ Allation |
+| ETL | ✅ ETL | ✅ ETL | ✅ ETL |
+| DBC Tables V | ✅ DBC tables-V | ✅ | ✅ |
+| OpenLineage | ✅ OpenLinage.io | ✅ OpenLinage.io | ✅ OpenLinage.io |
+
+#### Русская разговорная речь
+
+| Фраза | whisper.cpp (CPU) | CT2 f32 | CT2 int8f32 |
+|-------|------------------|---------|-------------|
+| "на другую мониторочку" | ✅ "на другом мониторчике" | ✅ "мониторчику" | ⚠️ "мою точку" |
+| "верхнеуровневое" | ✅ | ✅ | ✅ |
+| "датарентген" | ✅ "даторентген" | ✅ "даторентген" | ✅ "даторентген" |
+| "девовские схемы" | ✅ | ✅ | ✅ |
+| "с накиданными правами" | ✅ | ✅ | ✅ |
+| "Вьюхи" | ⚠️ "Yuhi" | ✅ "Вьюхи" | ⚠️ "Yuhi" |
+
+#### Структура и пунктуация
+
+| Аспект | whisper.cpp (CPU) | CT2 f32 | CT2 int8f32 |
+|--------|------------------|---------|-------------|
+| Пунктуация | хорошая | хорошая | хорошая |
+| Длина сегментов | 1–10 сек | ~1 мин | ~1 мин |
+
+**Вывод по качеству**: whisper.cpp medium f16 на уровне CTranslate2 float32/int8_float32.
+Качество сопоставимо, различия минимальны. Сегменты короче (1–10 сек vs ~1 мин) —
+это даже лучше для навигации по транскрипту.
+
+### Блокер: Vulkan в WSL2 для AMD
+
+Для получения GPU-ускорения нужно одно из:
+
+1. **Нативный Linux** (dual boot / bare metal) — RADV драйвер работает с Radeon 780M
+2. **Windows-сборка** — нативный Vulkan через AMD Adrenalin драйвер
+3. **WSL2 + dozen** — экспериментальный Vulkan-over-D3D12 драйвер mesa.
+   Статус: [в разработке](https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests?search=dozen),
+   не включён в стандартную mesa Ubuntu.
+   Потенциально можно собрать mesa из исходников с `-Dvulkan-drivers=microsoft-experimental`
+
+**Рекомендация**: попробовать Windows-сборку whisper.cpp — это самый простой путь
+к Vulkan + Radeon 780M. Либо собрать mesa с dozen для WSL2.
+
+## Рекомендуемый план (обновлённый)
+
+1. ~~**Прототип в WSL** — собрать whisper.cpp с Vulkan, прогнать тестовый файл~~ ✅ Сделано
+2. **Качество подтверждено** — whisper.cpp medium f16 ≈ CT2 float32/int8_float32 ✅
+3. **GPU-ускорение заблокировано в WSL2** — Vulkan не видит AMD GPU
+4. **Следующий шаг**: собрать whisper.cpp на Windows с Vulkan (CMake + MSVC/MinGW)
+   или собрать mesa dozen для WSL2
+5. После получения GPU-бенчмарка — решение о включении бэкенда `backends/whisper_cpp.py`
+6. NPU — отложить до XDNA 2 или до появления pip-пакета от AMD
