@@ -247,12 +247,95 @@ Whisper.cpp отработал **на CPU** (4 потока, AVX512).
 **Рекомендация**: попробовать Windows-сборку whisper.cpp — это самый простой путь
 к Vulkan + Radeon 780M. Либо собрать mesa с dozen для WSL2.
 
+## Прототип: whisper.cpp + Vulkan на Windows (2026-03-23)
+
+### Сборка
+
+whisper.cpp собран на Windows с MinGW (MSYS2) + Vulkan:
+```
+cmake -B build-vulkan -G "MinGW Makefiles" -DGGML_VULKAN=ON -DCMAKE_BUILD_TYPE=Release
+```
+
+Vulkan GPU обнаружен:
+```
+ggml_vulkan: Found 1 Vulkan devices:
+ggml_vulkan: 0 = AMD Radeon(TM) 780M (AMD proprietary driver) | uma: 1 | fp16: 1 |
+  warp size: 64 | shared memory: 32768 | int dot: 1 | matrix cores: KHR_coopmat
+```
+
+### Проблема: зацикливание (repetition loop)
+
+Первый запуск (дефолтные параметры): **520с**, но с ~07:00 модель зациклилась
+на фразе "Ну, опять же, они могут завести…" — повторяется ~170 раз до конца записи.
+Потеряна половина транскрипта.
+
+**Причина**: whisper.cpp передаёт контекст предыдущего сегмента в декодер (`-mc -1`),
+что провоцирует repetition loop на длинных записях с паузами/перебивками.
+
+**Решение**: `-mc 0` (не передавать контекст между сегментами).
+
+### Скорость (Vulkan, -mc 0)
+
+| Параметр | Значение |
+|----------|----------|
+| Модель | ggml-medium.bin (f16, 1533 МБ) на Vulkan GPU |
+| Аудио | 14:41 (881с), русский, 3 участника |
+| Общее время | **432с** |
+| encode | 123.5с (35 проходов, 3.5с/проход) |
+| batchd (decode) | 252.7с |
+| Потоки | 4 / 16 |
+
+Сравнение с бенчмарком (тот же аудиофайл):
+
+| Конфигурация | Время, с | Ускорение vs CPU f32 |
+|---|---|---|
+| OpenVINO fp16 (medium) | ~240 | 3.7x |
+| **whisper.cpp Vulkan + Radeon 780M** | **~432** | **2.0x** |
+| CT2 int8_float32 (medium) | ~599 | 1.5x |
+| CT2 float32 / whisper.cpp CPU | ~881-886 | 1.0x |
+
+### Качество (Vulkan, -mc 0)
+
+#### Техтермины
+
+| Термин | whisper.cpp Vulkan | CT2 int8f32 |
+|--------|-------------------|-------------|
+| DWH | ✅ DWH | ✅ DWH |
+| Teradata | ✅ TeraData | ✅ Teradata |
+| NiFi | ⚠️ IFI | ✅ NiFi |
+| FineBI | ✅ FindBI/FineBI/FNBI | ✅ finebi/FNBI |
+| Alation | ✅ Allation | ✅ Allation |
+| ETL | ✅ ETL | ✅ ETL |
+| DBC Tables V | ⚠️ dbc tables v (lowercase) | ✅ DBC Tables V |
+| OpenLineage | ✅ OpenLinage.io | ✅ OpenLinage.io |
+| Вьюхи | ✅ Вьюхи | ⚠️ Yuhi |
+
+#### Русская разговорная речь и пунктуация
+
+Качество сопоставимо с CT2 int8_float32. Пунктуация хорошая в обоих случаях.
+Сегменты у whisper.cpp короче (2-10 сек vs ~1 мин) — удобнее для навигации.
+
+### Вывод
+
+whisper.cpp + Vulkan на Radeon 780M даёт **432с** — всего **28% быстрее** CT2 int8_float32
+(599с). Разница недостаточна, чтобы оправдать сложность интеграции:
+
+- Отдельная сборка whisper.cpp (cmake + MinGW + VulkanSDK)
+- Другой формат моделей (GGML вместо CTranslate2)
+- Workaround `-mc 0` от зацикливания
+- Конвертация в WAV (whisper.cpp не принимает mp4 напрямую)
+- Ещё одна зависимость для пользователя
+
+**CT2 int8_float32 остаётся оптимальным выбором**: уже встроен в проект, zero-config,
+хорошее качество, приемлемая скорость.
+
 ## Рекомендуемый план (обновлённый)
 
 1. ~~**Прототип в WSL** — собрать whisper.cpp с Vulkan, прогнать тестовый файл~~ ✅ Сделано
-2. **Качество подтверждено** — whisper.cpp medium f16 ≈ CT2 float32/int8_float32 ✅
-3. **GPU-ускорение заблокировано в WSL2** — Vulkan не видит AMD GPU
-4. **Следующий шаг**: собрать whisper.cpp на Windows с Vulkan (CMake + MSVC/MinGW)
-   или собрать mesa dozen для WSL2
-5. После получения GPU-бенчмарка — решение о включении бэкенда `backends/whisper_cpp.py`
+2. ~~**Качество подтверждено** — whisper.cpp medium f16 ≈ CT2 float32/int8_float32~~ ✅
+3. ~~**GPU-ускорение в WSL2** — Vulkan не видит AMD GPU~~ ✅ Подтверждено
+4. ~~**Windows-сборка с Vulkan** — 432с, 2x vs CPU, но всего 28% vs CT2 int8_float32~~ ✅
+5. **Решение**: whisper.cpp + Vulkan не оправдывает себя на Radeon 780M iGPU.
+   CT2 int8_float32 — оптимальный дефолт для CPU без CUDA.
 6. NPU — отложить до XDNA 2 или до появления pip-пакета от AMD
+7. Пересмотреть при появлении дискретного AMD GPU или WinML с Python-поддержкой
