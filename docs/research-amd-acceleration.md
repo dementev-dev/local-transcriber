@@ -109,9 +109,55 @@ vulkan = ["pywhispercpp>=0.4"]
 | AMD NPU (XDNA 1) | ⚠️ ограничен | частичное | высокая | средняя |
 | WinML (будущее) | ⏳ не готов | неизвестно | средняя | — |
 
+## Детали по whisper.cpp + Vulkan
+
+### Модели (GGML .bin формат, НЕ GGUF)
+
+Скачивать с https://huggingface.co/ggerganov/whisper.cpp/tree/main
+
+| Модель | Файл | Размер |
+|--------|------|--------|
+| medium f16 | `ggml-medium.bin` | 1.53 ГБ |
+| medium q8_0 | `ggml-medium-q8_0.bin` | 823 МБ |
+| medium q5_0 | `ggml-medium-q5_0.bin` | 539 МБ |
+| large-v3 f16 | `ggml-large-v3.bin` | 3.1 ГБ |
+| large-v3 q5_0 | `ggml-large-v3-q5_0.bin` | 1.08 ГБ |
+| large-v3-turbo f16 | `ggml-large-v3-turbo.bin` | 1.62 ГБ |
+| large-v3-turbo q8_0 | `ggml-large-v3-turbo-q8_0.bin` | 874 МБ |
+
+### Python-биндинги
+
+**pywhispercpp** (v1.4.1) — pip wheel CPU-only. Для Vulkan нужна сборка из исходников:
+```bash
+GGML_VULKAN=1 pip install git+https://github.com/absadiki/pywhispercpp
+```
+Требует: VulkanSDK, cmake, C++ компилятор.
+
+### Subprocess-подход (альтернатива)
+
+whisper-cli принимает WAV 16kHz mono, выдаёт JSON с таймкодами:
+```bash
+whisper-cli -m ggml-medium.bin -f audio.wav -l ru -oj -of output
+```
+
+Для видео/mp3 нужна предварительная конвертация через ffmpeg (PyAV уже есть в зависимостях).
+
+### Сборка whisper.cpp с Vulkan
+
+```bash
+# Linux/WSL
+sudo apt install cmake build-essential libvulkan-dev
+git clone https://github.com/ggml-org/whisper.cpp
+cd whisper.cpp
+cmake -B build -DGGML_VULKAN=ON -DCMAKE_BUILD_TYPE=Release
+cmake --build build --config Release -j$(nproc)
+# -> build/bin/whisper-cli
+```
+
 ## Рекомендуемый план
 
-1. **Прототип** whisper.cpp + Vulkan бэкенда (pywhispercpp или subprocess)
-2. **Бенчмарк** на том же тестовом файле — сравнить скорость и качество GGUF vs CTranslate2
+1. **Прототип в WSL** — собрать whisper.cpp с Vulkan, прогнать тестовый файл
+2. **Бенчмарк** на том же тестовом файле — сравнить скорость и качество GGML vs CTranslate2
 3. **Решение** о включении в основной проект по результатам бенчмарка
-4. NPU — отложить до XDNA 2 или до появления pip-пакета от AMD
+4. Если ОК — оформить как бэкенд `backends/whisper_cpp.py`
+5. NPU — отложить до XDNA 2 или до появления pip-пакета от AMD
