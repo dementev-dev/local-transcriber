@@ -50,7 +50,7 @@ OpenVINO ускоряет inference на x86 процессорах (Intel и AM
 |---|---|---|---|
 | Intel Ultra 7 255H | **122с** | **411с** | — |
 | AMD Ryzen 7 8845H | 185с | 416с | 734с |
-| Intel i7 (WSL2) | 171-205с | — | 658с |
+| Intel i7-11800H (WSL2) | 171-205с | — | 658с |
 
 **Ускорение vs CPU float32:** **3-6x** в зависимости от CPU.
 
@@ -108,7 +108,7 @@ CTranslate2 по умолчанию использует 4 потока. На м
 transcribe meeting.mp4 --device cpu --compute-type int8_float32 --threads 8
 ```
 
-**Замеры (Intel i7, 8 ядер / 16 потоков, medium int8_float32, 16 мин файл):**
+**Замеры (Intel i7-11800H, 8 ядер / 16 потоков, medium int8_float32, 16 мин файл):**
 
 | --threads | Время | Ускорение |
 |---|---|---|
