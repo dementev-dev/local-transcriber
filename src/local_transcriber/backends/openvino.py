@@ -106,8 +106,9 @@ class OpenVINOBackend:
         model_path: str,
         device: str,
         compute_type: str,
+        cpu_threads: int = 0,
     ) -> Any:
-        """Создаёт WhisperPipeline."""
+        """Создаёт WhisperPipeline. cpu_threads не используется (OpenVINO управляет сам)."""
         import openvino_genai as ov_genai
 
         ov_dev = self._resolve_ov_device()

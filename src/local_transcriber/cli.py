@@ -61,6 +61,10 @@ def main(
         None, "--compute-type", show_default=False,
         help="Тип вычислений [по умолч.: float16 (CUDA) / int8 (OpenVINO GPU/CPU) / float32 (CPU)]"
     ),
+    threads: int = typer.Option(
+        0, "--threads", "-t", show_default=False, min=0,
+        help="Потоки CPU (0 = дефолт библиотеки; рекомендуется = число физ. ядер)"
+    ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Подробный вывод"),
     force: bool = typer.Option(False, "--force", "-f", help="Перезаписать существующие транскрипты"),
 ) -> None:
@@ -89,9 +93,9 @@ def main(
             raise SystemExit(1)
 
         if is_batch:
-            _run_batch(expanded, defaults, verbose, force, ct_explicit)
+            _run_batch(expanded, defaults, verbose, force, ct_explicit, cpu_threads=threads)
         else:
-            _run_single(expanded[0], defaults, output, verbose, ct_explicit)
+            _run_single(expanded[0], defaults, output, verbose, ct_explicit, cpu_threads=threads)
     except KeyboardInterrupt:
         console.print("\nПрервано пользователем.", style="yellow")
         raise SystemExit(130)
@@ -129,6 +133,7 @@ def _run_single(
     output: Path | None,
     verbose: bool,
     compute_type_explicit: bool = False,
+    cpu_threads: int = 0,
 ) -> None:
     """Пайплайн одного файла: валидация → модель → транскрипция → запись."""
     start = time.monotonic()
@@ -148,6 +153,7 @@ def _run_single(
         defaults["model"], resolved_device, defaults["compute_type"],
         on_status=lambda msg: console.print(msg), strict_device=strict,
         compute_type_explicit=compute_type_explicit,
+        cpu_threads=cpu_threads,
     )
     actual_ct = getattr(backend, "actual_compute_type", defaults["compute_type"]) or defaults["compute_type"]
     console.print(
@@ -174,6 +180,7 @@ def _run_single(
             on_segment=on_segment if verbose else None,
             on_status=status.update,
             strict_device=strict,
+            cpu_threads=cpu_threads,
         )
 
     result = tfr.result
@@ -219,6 +226,7 @@ def _run_batch(
     verbose: bool,
     force: bool,
     compute_type_explicit: bool = False,
+    cpu_threads: int = 0,
 ) -> None:
     """Трёхфазный батч-пайплайн: prescan → загрузка модели → транскрипция."""
     # Phase 1: Prescan — fail-fast + skip до загрузки модели (экономим ~2-5 сек)
@@ -256,6 +264,7 @@ def _run_batch(
         defaults["model"], resolved_device, defaults["compute_type"],
         on_status=lambda msg: console.print(msg), strict_device=strict,
         compute_type_explicit=compute_type_explicit,
+        cpu_threads=cpu_threads,
     )
 
     if actual_device == "openvino-gpu" and defaults["model"] != "large-v3":
@@ -306,6 +315,7 @@ def _run_batch(
                     on_segment=on_segment if verbose else None,
                     on_status=status.update if not verbose else lambda msg: console.print(msg),
                     strict_device=strict,
+                    cpu_threads=cpu_threads,
                 )
 
             if tfr.actual_device != actual_device:

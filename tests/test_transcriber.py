@@ -321,6 +321,34 @@ def test_load_model_returns_backend_and_path(mock_get_backend):
     assert actual_device == "cpu"
 
 
+@patch("local_transcriber.transcriber.get_backend")
+def test_load_model_passes_cpu_threads_to_backend(mock_get_backend):
+    backend = _make_backend(model_path="/mock/model/path")
+    mock_get_backend.return_value = backend
+
+    load_model("tiny", "cpu", "int8", cpu_threads=8)
+
+    assert backend.create_model.call_args.kwargs["cpu_threads"] == 8
+
+
+@patch("local_transcriber.transcriber.get_backend")
+def test_load_model_fallback_preserves_cpu_threads(mock_get_backend):
+    cuda_backend = _make_backend(create_model_error=RuntimeError("CUDA out of memory"))
+    cpu_model = MagicMock()
+    cpu_backend = _make_backend(model=cpu_model, model_path="/mock/cpu/model")
+
+    def backend_for_device(device, **kwargs):
+        return cuda_backend if device == "cuda" else cpu_backend
+
+    mock_get_backend.side_effect = backend_for_device
+
+    with pytest.warns(UserWarning, match="Переключение на CPU"):
+        load_model("tiny", "cuda", "int8", cpu_threads=6)
+
+    assert cuda_backend.create_model.call_args.kwargs["cpu_threads"] == 6
+    assert cpu_backend.create_model.call_args.kwargs["cpu_threads"] == 6
+
+
 # === _transcribe_file() tests ===
 
 
@@ -525,6 +553,36 @@ def test_transcribe_file_openvino_gpu_midstream_fallback(mock_get_backend):
     assert tfr.actual_device == "cpu"
     assert tfr.backend is cpu_backend
     assert tfr.model_path == "/mock/cpu/model"
+
+
+@patch("local_transcriber.transcriber.get_backend")
+def test_transcribe_file_midstream_fallback_preserves_cpu_threads(mock_get_backend):
+    ov_backend = _make_backend(
+        transcribe_error=RuntimeError("OpenVINO inference error"),
+    )
+    cpu_backend = _make_backend(
+        transcribe_result=_make_result(count=2, device_used="cpu"),
+        model_path="/mock/cpu/model",
+    )
+
+    def backend_for_device(device, **kwargs):
+        return ov_backend if device.startswith("openvino") else cpu_backend
+
+    mock_get_backend.side_effect = backend_for_device
+
+    with pytest.warns(UserWarning, match="Переключение на CPU"):
+        _transcribe_file(
+            model=MagicMock(),
+            actual_device="openvino-gpu",
+            backend=ov_backend,
+            model_path="/mock/ov/model",
+            file_path=Path("test.mp3"),
+            model_name="medium",
+            compute_type="fp16",
+            cpu_threads=6,
+        )
+
+    assert cpu_backend.create_model.call_args.kwargs["cpu_threads"] == 6
 
 
 @patch("local_transcriber.transcriber.get_backend")

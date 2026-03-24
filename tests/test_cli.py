@@ -862,3 +862,62 @@ def test_cli_openvino_alias_resolves_to_gpu(tmp_path):
     assert out.exit_code == 0
     # detect_device("openvino") resolved to "openvino-gpu", load_model receives it
     assert mock_load_model.call_args[0][1] == "openvino-gpu"
+
+
+# === --threads ===
+
+
+def test_cli_threads_passed_to_load_model(tmp_path):
+    """--threads передаётся в load_model как cpu_threads."""
+    audio = tmp_path / "test.mp3"
+    audio.write_bytes(b"fake")
+    result = _make_result()
+    model = _make_model()
+    backend = _make_backend()
+    tfr = _make_tfr(result=result, model=model, backend=backend)
+    mock_load_model = MagicMock(return_value=(model, "cpu", backend, "/models/medium"))
+
+    with (
+        patch("local_transcriber.cli.load_config", return_value={}),
+        patch("local_transcriber.cli.validate_input_file", return_value=audio),
+        patch("local_transcriber.cli.detect_device", return_value="cpu"),
+        patch("local_transcriber.cli.load_model", mock_load_model),
+        patch("local_transcriber.cli._transcribe_file", return_value=tfr),
+        patch("local_transcriber.cli.write_transcript"),
+    ):
+        out = runner.invoke(app, [str(audio), "--threads", "8"])
+
+    assert out.exit_code == 0
+    assert mock_load_model.call_args.kwargs["cpu_threads"] == 8
+
+
+def test_cli_threads_default_zero(tmp_path):
+    """Без --threads load_model получает cpu_threads=0."""
+    audio = tmp_path / "test.mp3"
+    audio.write_bytes(b"fake")
+    result = _make_result()
+    model = _make_model()
+    backend = _make_backend()
+    tfr = _make_tfr(result=result, model=model, backend=backend)
+    mock_load_model = MagicMock(return_value=(model, "cpu", backend, "/models/medium"))
+
+    with (
+        patch("local_transcriber.cli.load_config", return_value={}),
+        patch("local_transcriber.cli.validate_input_file", return_value=audio),
+        patch("local_transcriber.cli.detect_device", return_value="cpu"),
+        patch("local_transcriber.cli.load_model", mock_load_model),
+        patch("local_transcriber.cli._transcribe_file", return_value=tfr),
+        patch("local_transcriber.cli.write_transcript"),
+    ):
+        out = runner.invoke(app, [str(audio)])
+
+    assert out.exit_code == 0
+    assert mock_load_model.call_args.kwargs["cpu_threads"] == 0
+
+
+def test_cli_threads_negative_rejected(tmp_path):
+    """--threads с отрицательным значением отклоняется typer (min=0)."""
+    audio = tmp_path / "test.mp3"
+    audio.write_bytes(b"fake")
+    out = runner.invoke(app, [str(audio), "--threads", "-1"])
+    assert out.exit_code != 0

@@ -30,8 +30,12 @@ class Backend(Protocol):
         model_path: str,
         device: str,
         compute_type: str,
+        cpu_threads: int = 0,
     ) -> Any:
-        """Создаёт модель. Возвращает backend-специфичный объект."""
+        """Создаёт модель. Возвращает backend-специфичный объект.
+
+        cpu_threads: число потоков для CPU inference (0 = дефолт библиотеки).
+        """
         ...
 
     def transcribe(

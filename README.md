@@ -147,6 +147,7 @@ transcribe *.mp4 --force
 | `--output` | `-o` | `<файл>-transcript.md` | Путь к выходному файлу |
 | `--device` | `-d` | `auto` | Устройство (auto, cpu, cuda, openvino, openvino-gpu, openvino-cpu) |
 | `--compute-type` | — | float16 (CUDA) / int8 (OpenVINO GPU/CPU) / float32 (CPU) | Тип вычислений |
+| `--threads` | `-t` | 0 (авто) | Потоки CPU (рекомендуется = число физ. ядер) |
 | `--force` | `-f` | — | Перезаписать существующие транскрипты |
 | `--verbose` | `-v` | — | Подробный вывод |
 

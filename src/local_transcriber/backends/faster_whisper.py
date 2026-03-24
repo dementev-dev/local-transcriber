@@ -84,10 +84,17 @@ class FasterWhisperBackend:
         model_path: str,
         device: str,
         compute_type: str,
+        cpu_threads: int = 0,
     ) -> Any:
-        """Создаёт WhisperModel."""
+        """Создаёт WhisperModel.
+
+        cpu_threads: число потоков для CPU inference (0 = дефолт библиотеки, обычно 4).
+        """
         try:
-            return WhisperModel(model_path, device=device, compute_type=compute_type)
+            return WhisperModel(
+                model_path, device=device, compute_type=compute_type,
+                cpu_threads=cpu_threads,
+            )
         except ImportError as exc:
             if _is_missing_socksio_error(exc):
                 raise RuntimeError(

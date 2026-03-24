@@ -31,7 +31,7 @@ def test_resolve_repo_explicit_unsupported_pair_raises():
     """Явный --compute-type с несуществующей парой → ошибка."""
     backend = OpenVINOBackend(compute_type_explicit=True)
     with pytest.raises(ValueError, match="недоступна с compute_type='fp16'"):
-        backend._resolve_repo("medium", "fp16")
+        backend._resolve_repo("small", "fp16")
 
 
 def test_resolve_repo_explicit_unknown_model_raises():

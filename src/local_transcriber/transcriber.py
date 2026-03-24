@@ -22,11 +22,13 @@ def load_model(
     on_status: Callable[[str], None] | None = None,
     strict_device: bool = False,
     compute_type_explicit: bool = False,
+    cpu_threads: int = 0,
 ) -> tuple[Any, str, Any, str]:
     """Загружает модель: ensure + create с fallback.
 
     Возвращает (model, actual_device, backend, model_path).
     compute_type_explicit: True если пользователь явно указал --compute-type.
+    cpu_threads: число потоков для CPU inference (0 = дефолт библиотеки).
     """
     backend = get_backend(device, compute_type_explicit=compute_type_explicit)
     actual_device = device
@@ -35,7 +37,7 @@ def load_model(
 
     try:
         _notify_status(on_status, f"Инициализирую модель на {device}...")
-        model = backend.create_model(model_path, device, compute_type)
+        model = backend.create_model(model_path, device, compute_type, cpu_threads=cpu_threads)
         # Резолвим actual_device по реальному OpenVINO device
         ov_dev = getattr(backend, "actual_ov_device", None)
         if ov_dev == "GPU" and actual_device != "openvino-gpu":
@@ -55,7 +57,7 @@ def load_model(
             backend = get_backend("cpu")
             model_path = backend.ensure_model_available(model_name, compute_type, on_status)
             _notify_status(on_status, "Инициализирую модель на cpu...")
-            model = backend.create_model(model_path, "cpu", compute_type)
+            model = backend.create_model(model_path, "cpu", compute_type, cpu_threads=cpu_threads)
         else:
             raise
 
@@ -74,6 +76,7 @@ def _transcribe_file(
     on_segment: Callable[[Segment], None] | None = None,
     on_status: Callable[[str], None] | None = None,
     strict_device: bool = False,
+    cpu_threads: int = 0,
 ) -> TranscribeFileResult:
     """Транскрибирует один файл. При mid-stream fallback перезагружает модель."""
     lang_arg = language if language and language != "auto" else None
@@ -95,7 +98,7 @@ def _transcribe_file(
             backend = get_backend("cpu")
             model_path = backend.ensure_model_available(model_name, compute_type, on_status)
             _notify_status(on_status, "Инициализирую модель на cpu...")
-            model = backend.create_model(model_path, "cpu", compute_type)
+            model = backend.create_model(model_path, "cpu", compute_type, cpu_threads=cpu_threads)
             _notify_status(on_status, "Транскрибирую...")
             result = backend.transcribe(model, file_path, lang_arg, on_segment, on_status)
             result.device_used = actual_device
@@ -120,16 +123,19 @@ def transcribe(
     on_segment: Callable[[Segment], None] | None = None,
     on_status: Callable[[str], None] | None = None,
     strict_device: bool = False,
+    cpu_threads: int = 0,
 ) -> TranscribeResult:
     """High-level API: загрузка модели + транскрипция за один вызов."""
     model, actual_device, backend, model_path = load_model(
         model_name, device, compute_type, on_status, strict_device,
         compute_type_explicit=True,  # Python API — caller explicitly chose compute_type
+        cpu_threads=cpu_threads,
     )
     tfr = _transcribe_file(
         model, actual_device, backend, model_path,
         file_path, model_name, compute_type,
         language, on_segment, on_status, strict_device,
+        cpu_threads=cpu_threads,
     )
     return tfr.result
 
