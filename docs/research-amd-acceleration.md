@@ -291,8 +291,18 @@ ggml_vulkan: 0 = AMD Radeon(TM) 780M (AMD proprietary driver) | uma: 1 | fp16: 1
 |---|---|---|
 | OpenVINO fp16 (medium) | ~240 | 3.7x |
 | **whisper.cpp Vulkan + Radeon 780M** | **~432** | **2.0x** |
-| CT2 int8_float32 (medium) | ~599 | 1.5x |
+| **CT2 int8_float32, 8 threads** | **~458** | **1.9x** |
+| CT2 int8_float32, 16 threads | ~498 | 1.8x |
+| CT2 int8_float32, default (4 threads) | ~599 | 1.5x |
 | CT2 float32 / whisper.cpp CPU | ~881-886 | 1.0x |
+
+**Оптимизация потоков**: CTranslate2 по умолчанию использует 4 потока (`cpu_threads=0`).
+На Ryzen 7 8845H (8 ядер / 16 потоков) оптимум — **8 потоков** (по числу физических ядер).
+16 потоков (SMT/hyperthreading) не помогают — контекст-свитчинг нивелирует выигрыш.
+Управление: `OMP_NUM_THREADS=8` или параметр `cpu_threads` в WhisperModel.
+
+CT2 int8_float32 с 8 потоками (**458с**) почти догоняет whisper.cpp Vulkan (**432с**)
+без дополнительных зависимостей.
 
 ### Качество (Vulkan, -mc 0)
 
