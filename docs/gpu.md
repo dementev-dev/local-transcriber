@@ -222,6 +222,25 @@ SQL, PostgreSQL, Greenplum, Airflow, ClickHouse, Docker, CDR, GTP, MAP).
 6. **OpenVINO быстрее, но CPU бэкенд качественнее** — разница в pipeline декодирования
    (temperature fallback, фильтры галлюцинаций), а не в квантизации
 
+## Потенциальные направления развития
+
+### Качественный pipeline для OpenVINO
+
+Сейчас качественный pipeline декодирования (temperature fallback, фильтры галлюцинаций,
+VAD) доступен только через CTranslate2, т.е. на CPU и NVIDIA CUDA. Пользователи Intel Arc
+и AMD Radeon получают скорость OpenVINO, но без защиты от галлюцинаций.
+
+**Решение**: реализовать temperature fallback, compression_ratio и log_prob фильтры
+поверх OpenVINO GenAI WhisperPipeline. Эти эвристики — логика на Python (~50-100 строк),
+не зависящая от inference engine. Это даст Intel Arc / AMD GPU то же качество,
+что сейчас есть только у CUDA-пользователей.
+
+### CUDA: тестирование int8_float32 / int8_float16
+
+На CPU `int8_float32` показал качество на уровне float32 при 1.5x ускорении.
+На CUDA аналогичный эффект может решить проблему галлюцинаций large-v3 с int8
+при сохранении скорости GPU. Требуется тестирование на реальном NVIDIA GPU.
+
 ## Troubleshooting
 
 ### CUDA не обнаружен
