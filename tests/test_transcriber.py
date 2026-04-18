@@ -649,3 +649,42 @@ def test_ensure_model_available_openvino_default_compute_type():
     repo, ct = backend._resolve_repo("medium", "int8")
     assert repo == "OpenVINO/whisper-medium-int8-ov"
     assert ct == "int8"
+
+
+# === Parakeet no-fallback policy ===
+
+
+@patch("local_transcriber.transcriber.get_backend")
+def test_load_model_parakeet_no_fallback_on_create_error(mock_get_backend):
+    """При ошибке Parakeet во время create_model исключение пробрасывается,
+    без silent fallback на CPU FasterWhisper."""
+    parakeet_backend = _make_backend(create_model_error=RuntimeError("onnxruntime crashed"))
+    mock_get_backend.return_value = parakeet_backend
+
+    with pytest.raises(RuntimeError, match="onnxruntime"):
+        load_model(
+            model_name="parakeet-tdt-0.6b-v3",
+            device="parakeet-cpu",
+            compute_type="int8",
+        )
+
+    # get_backend вызван только один раз (НЕ было fallback-вызова для "cpu")
+    assert mock_get_backend.call_count == 1
+
+
+@patch("local_transcriber.transcriber.get_backend")
+def test_transcribe_file_parakeet_no_fallback_on_runtime_error(mock_get_backend):
+    """Ошибка Parakeet при transcribe не переключает на CPU FasterWhisper."""
+    parakeet_backend = _make_backend(transcribe_error=RuntimeError("onnxruntime inference error"))
+    mock_get_backend.return_value = parakeet_backend
+
+    with pytest.raises(RuntimeError, match="onnxruntime"):
+        transcribe(
+            file_path=Path("test.mp3"),
+            model_name="parakeet-tdt-0.6b-v3",
+            device="parakeet-cpu",
+            compute_type="int8",
+        )
+
+    # Только один бэкенд создан — Parakeet; без fallback на cpu
+    assert mock_get_backend.call_count == 1

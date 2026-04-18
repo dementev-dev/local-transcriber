@@ -45,6 +45,10 @@ def load_model(
         elif ov_dev == "CPU" and actual_device.startswith("openvino") and actual_device != "openvino-cpu":
             actual_device = "openvino-cpu"
     except (RuntimeError, ValueError) as exc:
+        if device.startswith("parakeet"):
+            # Parakeet — другое семейство моделей (multi-language vs ru Whisper);
+            # silent fallback на CPU Whisper меняет семантику — пробрасываем наружу.
+            raise
         if device != "cpu" and _is_backend_error(exc, device):
             if strict_device:
                 raise
@@ -86,6 +90,10 @@ def _transcribe_file(
         result = backend.transcribe(model, file_path, lang_arg, on_segment, on_status)
         result.device_used = actual_device
     except (RuntimeError, ValueError) as exc:
+        if actual_device.startswith("parakeet"):
+            # Parakeet — другое семейство моделей; silent fallback на CPU Whisper
+            # меняет качество/семантику — пробрасываем ошибку наружу.
+            raise
         if actual_device != "cpu" and _is_backend_error(exc, actual_device):
             if strict_device:
                 raise
@@ -171,6 +179,8 @@ def _is_backend_error(exc: BaseException, device: str) -> bool:
         return _is_cuda_error(exc)
     if device.startswith("openvino"):
         return _is_openvino_error(exc)
+    if device.startswith("parakeet"):
+        return _is_parakeet_error(exc)
     return False
 
 
@@ -183,6 +193,18 @@ def _is_openvino_error(exc: BaseException) -> bool:
     и не попадают сюда. Поэтому для RuntimeError считаем это backend failure.
     """
     return isinstance(exc, RuntimeError)
+
+
+def _is_parakeet_error(exc: BaseException) -> bool:
+    """Проверка ошибок Parakeet runtime (onnx-asr / onnxruntime).
+
+    Для RuntimeError считаем backend failure (аналогично OpenVINO).
+    Дополнительно проверяем module name — чтобы явно поймать onnxruntime-исключения.
+    """
+    if isinstance(exc, RuntimeError):
+        return True
+    mod = type(exc).__module__ or ""
+    return "onnxruntime" in mod or "onnx_asr" in mod
 
 
 def _notify_status(on_status: Callable[[str], None] | None, message: str) -> None:
