@@ -12,6 +12,7 @@ dependencies = [
     "nvidia-cublas-cu12>=12.4; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "openvino-genai>=2025.0; sys_platform != 'darwin' and (platform_machine == 'x86_64' or platform_machine == 'AMD64')",
     "tomli>=2.0; python_version < '3.11'",
+    "onnx-asr[cpu,hub]>=0.7",
 ]
 
 [project.scripts]
