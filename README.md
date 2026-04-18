@@ -271,7 +271,7 @@ transcribe ваш_файл.mp3 --device parakeet
 ```
 
 Первый запуск скачает:
-- Модель `nvidia/parakeet-tdt-0.6b-v3` (~670 MB int8 или ~2 GB fp32) в `~/.cache/huggingface/`.
+- Модель `istupakov/parakeet-tdt-0.6b-v3-onnx` (~670 MB int8 или ~2 GB fp32) в `~/.cache/huggingface/` — готовый ONNX-порт официальной NVIDIA-модели.
 - Silero VAD (~15 MB) — обязателен для файлов > 20 сек.
 
 Последующие запуски — **оффлайн**.

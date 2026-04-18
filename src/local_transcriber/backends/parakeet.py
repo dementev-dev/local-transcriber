@@ -13,7 +13,10 @@ import onnx_asr
 
 from local_transcriber.types import Segment, TranscribeResult
 
-MODEL_REPO = "nvidia/parakeet-tdt-0.6b-v3"
+# HF-репозиторий с уже сконвертированными ONNX-файлами (int8 + fp32).
+# Официальный `nvidia/parakeet-tdt-0.6b-v3` содержит только .nemo/.safetensors и
+# onnx-asr loader его не поддерживает.
+MODEL_REPO = "istupakov/parakeet-tdt-0.6b-v3-onnx"
 ONNX_ASR_MODEL_ALIAS = "nemo-parakeet-tdt-0.6b-v3"
 
 SUPPORTED_MODEL_NAMES: set[str] = {"parakeet-tdt-0.6b-v3", "parakeet"}
@@ -21,6 +24,24 @@ SUPPORTED_COMPUTE_TYPES: set[str] = {"int8", "float32"}
 
 MODEL_REQUIRED_FILES: list[str] = [
     "config.json",
+]
+
+# Паттерны для snapshot_download: качаем только то, что нужно под выбранный
+# compute_type — иначе HF тянет и int8, и fp32 (~5 GB вместо ~670 MB / ~2 GB).
+_INT8_PATTERNS: list[str] = [
+    "config.json",
+    "vocab.txt",
+    "nemo128.onnx",
+    "encoder-model.int8.onnx",
+    "decoder_joint-model.int8.onnx",
+]
+_FLOAT32_PATTERNS: list[str] = [
+    "config.json",
+    "vocab.txt",
+    "nemo128.onnx",
+    "encoder-model.onnx",
+    "encoder-model.onnx.data",
+    "decoder_joint-model.onnx",
 ]
 
 
@@ -52,20 +73,25 @@ class ParakeetBackend:
             )
 
         self.actual_compute_type = compute_type
+        patterns = _INT8_PATTERNS if compute_type == "int8" else _FLOAT32_PATTERNS
 
         # Cache-first: сначала проверяем локальный кэш (как faster_whisper / openvino бэкенды)
         try:
             _notify(on_status, f"Проверяю кэш модели Parakeet ({MODEL_REPO})...")
-            cached_path = Path(snapshot_download(MODEL_REPO, local_files_only=True))
+            cached_path = Path(
+                snapshot_download(MODEL_REPO, local_files_only=True, allow_patterns=patterns)
+            )
             _validate_model_dir(cached_path)
             return str(cached_path)
         except LocalEntryNotFoundError:
             pass
         except ValueError:
-            _notify(on_status, f"Кэш Parakeet неполный, докачиваю...")
+            _notify(on_status, "Кэш Parakeet неполный, докачиваю...")
 
         _notify(on_status, f"Скачиваю модель Parakeet ({MODEL_REPO}) из Hugging Face...")
-        model_dir = Path(snapshot_download(MODEL_REPO, local_files_only=False))
+        model_dir = Path(
+            snapshot_download(MODEL_REPO, local_files_only=False, allow_patterns=patterns)
+        )
         _validate_model_dir(model_dir)
         return str(model_dir)
 
