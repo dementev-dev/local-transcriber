@@ -84,3 +84,97 @@ def test_ensure_model_available_validates_model_dir(tmp_path):
     ):
         with pytest.raises(ValueError, match="Неполная"):
             backend.ensure_model_available("parakeet-tdt-0.6b-v3", "int8")
+
+
+# === create_model ===
+
+
+def test_create_model_maps_int8_to_quantization(tmp_path):
+    backend = ParakeetBackend()
+    model_dir = _create_parakeet_model_dir(tmp_path / "parakeet")
+    fake_asr = MagicMock(name="asr")
+    fake_asr.with_vad.return_value = MagicMock(name="asr_with_vad")
+
+    with (
+        patch("local_transcriber.backends.parakeet.onnx_asr") as mock_ox,
+    ):
+        mock_ox.load_model.return_value = fake_asr
+        mock_ox.load_vad.return_value = MagicMock(name="vad")
+
+        backend.create_model(str(model_dir), "parakeet-cpu", "int8")
+
+    load_model_kwargs = mock_ox.load_model.call_args.kwargs
+    assert load_model_kwargs.get("quantization") == "int8"
+    assert mock_ox.load_model.call_args.args[0] == ONNX_ASR_MODEL_ALIAS
+    assert load_model_kwargs.get("path") == str(model_dir)
+
+
+def test_create_model_maps_float32_to_none_quantization(tmp_path):
+    backend = ParakeetBackend()
+    model_dir = _create_parakeet_model_dir(tmp_path / "parakeet")
+    fake_asr = MagicMock()
+    fake_asr.with_vad.return_value = MagicMock()
+
+    with patch("local_transcriber.backends.parakeet.onnx_asr") as mock_ox:
+        mock_ox.load_model.return_value = fake_asr
+        mock_ox.load_vad.return_value = MagicMock()
+
+        backend.create_model(str(model_dir), "parakeet-cpu", "float32")
+
+    assert mock_ox.load_model.call_args.kwargs.get("quantization") is None
+
+
+def test_create_model_wraps_with_silero_vad(tmp_path):
+    backend = ParakeetBackend()
+    model_dir = _create_parakeet_model_dir(tmp_path / "parakeet")
+    fake_asr = MagicMock()
+    wrapped = MagicMock(name="asr_with_vad")
+    fake_asr.with_vad.return_value = wrapped
+
+    with patch("local_transcriber.backends.parakeet.onnx_asr") as mock_ox:
+        mock_ox.load_model.return_value = fake_asr
+        fake_vad = MagicMock(name="silero_vad")
+        mock_ox.load_vad.return_value = fake_vad
+
+        returned = backend.create_model(str(model_dir), "parakeet-cpu", "int8")
+
+    mock_ox.load_vad.assert_called_once()
+    assert mock_ox.load_vad.call_args.kwargs.get("model") == "silero" \
+        or mock_ox.load_vad.call_args.args[0] == "silero"
+    fake_asr.with_vad.assert_called_once_with(vad=fake_vad)
+    assert returned is wrapped
+
+
+def test_create_model_cpu_threads_via_sess_options(tmp_path):
+    """cpu_threads > 0 → SessionOptions.intra_op_num_threads, НЕ provider_options."""
+    backend = ParakeetBackend()
+    model_dir = _create_parakeet_model_dir(tmp_path / "parakeet")
+    fake_asr = MagicMock()
+    fake_asr.with_vad.return_value = MagicMock()
+
+    with patch("local_transcriber.backends.parakeet.onnx_asr") as mock_ox:
+        mock_ox.load_model.return_value = fake_asr
+        mock_ox.load_vad.return_value = MagicMock()
+
+        backend.create_model(str(model_dir), "parakeet-cpu", "int8", cpu_threads=4)
+
+    kwargs = mock_ox.load_model.call_args.kwargs
+    assert "sess_options" in kwargs
+    assert kwargs["sess_options"].intra_op_num_threads == 4
+    assert "provider_options" not in kwargs
+
+
+def test_create_model_zero_threads_omits_sess_options(tmp_path):
+    backend = ParakeetBackend()
+    model_dir = _create_parakeet_model_dir(tmp_path / "parakeet")
+    fake_asr = MagicMock()
+    fake_asr.with_vad.return_value = MagicMock()
+
+    with patch("local_transcriber.backends.parakeet.onnx_asr") as mock_ox:
+        mock_ox.load_model.return_value = fake_asr
+        mock_ox.load_vad.return_value = MagicMock()
+
+        backend.create_model(str(model_dir), "parakeet-cpu", "int8", cpu_threads=0)
+
+    kwargs = mock_ox.load_model.call_args.kwargs
+    assert "sess_options" not in kwargs  # 0 = дефолт библиотеки, не трогаем

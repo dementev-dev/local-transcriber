@@ -7,10 +7,11 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from local_transcriber.types import Segment, TranscribeResult
-
 from huggingface_hub import snapshot_download
 from huggingface_hub.errors import LocalEntryNotFoundError
+import onnx_asr
+
+from local_transcriber.types import Segment, TranscribeResult
 
 MODEL_REPO = "nvidia/parakeet-tdt-0.6b-v3"
 ONNX_ASR_MODEL_ALIAS = "nemo-parakeet-tdt-0.6b-v3"
@@ -75,7 +76,25 @@ class ParakeetBackend:
         compute_type: str,
         cpu_threads: int = 0,
     ) -> Any:
-        raise NotImplementedError
+        """Создаёт asr-pipeline с Silero VAD.
+
+        cpu_threads: если > 0, передаётся через onnxruntime.SessionOptions.intra_op_num_threads.
+        VAD загружается здесь (runtime-зависимость; первый запуск требует интернет).
+        """
+        quantization = "int8" if compute_type == "int8" else None
+
+        load_kwargs: dict[str, Any] = {"path": model_path, "quantization": quantization}
+        if cpu_threads and cpu_threads > 0:
+            # intra_op_num_threads — атрибут SessionOptions, а НЕ provider_options.
+            # provider_options ожидает EP-специфичные ключи (device_id и т.п.).
+            import onnxruntime as ort
+            sess_options = ort.SessionOptions()
+            sess_options.intra_op_num_threads = cpu_threads
+            load_kwargs["sess_options"] = sess_options
+
+        asr = onnx_asr.load_model(ONNX_ASR_MODEL_ALIAS, **load_kwargs)
+        vad = onnx_asr.load_vad(model="silero")
+        return asr.with_vad(vad=vad)
 
     def transcribe(
         self,
