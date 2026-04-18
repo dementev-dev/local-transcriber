@@ -1127,3 +1127,36 @@ def test_cli_parakeet_config_model_mismatch_without_override_prints_friendly_err
     assert "Parakeet поддерживает только" in combined
     assert "--model parakeet" in combined
     assert "Traceback" not in combined
+
+
+def test_cli_parakeet_end_to_end_writes_file(tmp_path):
+    """Проверка end-to-end пайплайна с mock backend: файл записан и содержит ожидаемые поля."""
+    audio = tmp_path / "test.mp3"
+    audio.write_bytes(b"fake")
+
+    segments = [Segment(start=0.0, end=2.0, text="Привет мир")]
+    result = TranscribeResult(
+        segments=segments, language="multi", language_probability=0.0,
+        duration=2.0, device_used="parakeet-cpu",
+    )
+    model = _make_model()
+    backend = _make_parakeet_backend()
+    tfr = _make_tfr(result=result, model=model, actual_device="parakeet-cpu", backend=backend)
+
+    with (
+        patch("local_transcriber.cli.load_config", return_value={}),
+        patch("local_transcriber.cli.validate_input_file", return_value=audio),
+        patch("local_transcriber.cli.detect_device", return_value="parakeet-cpu"),
+        patch("local_transcriber.cli.load_model", return_value=(model, "parakeet-cpu", backend, "/models/parakeet")),
+        patch("local_transcriber.cli._transcribe_file", return_value=tfr),
+    ):
+        out = runner.invoke(app, [str(audio), "--device", "parakeet"])
+
+    assert out.exit_code == 0
+    output_md = tmp_path / "test-transcript.md"
+    assert output_md.exists()
+    content = output_md.read_text(encoding="utf-8")
+    assert "# Транскрипт: test.mp3" in content
+    assert "**Модель**: parakeet-tdt-0.6b-v3" in content
+    assert "**Язык**: multi (detected)" in content
+    assert "Привет мир" in content
