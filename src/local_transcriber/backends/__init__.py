@@ -25,6 +25,15 @@ def get_backend(device: str, *, compute_type_explicit: bool = True) -> Backend:
             ov_device=device, compute_type_explicit=compute_type_explicit
         )
 
+    if device in ("parakeet", "parakeet-cpu"):
+        try:
+            from .parakeet import ParakeetBackend
+        except ImportError:
+            raise ValueError(
+                "Parakeet бэкенд недоступен. Установите: pip install onnx-asr[cpu,hub]"
+            ) from None
+        return ParakeetBackend(compute_type_explicit=compute_type_explicit)
+
     # cuda, cpu и всё остальное → faster-whisper
     from .faster_whisper import FasterWhisperBackend
 
