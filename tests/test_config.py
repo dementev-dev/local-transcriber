@@ -173,3 +173,15 @@ def test_apply_device_defaults_openvino_cpu():
     result = apply_device_defaults(defaults, "openvino-cpu", cli, {})
     assert result["model"] == "medium"
     assert result["compute_type"] == "int8"
+
+
+def test_load_config_accepts_parakeet_device(tmp_path):
+    cfg = tmp_path / ".transcriber.toml"
+    cfg.write_text('device = "parakeet"\n')
+    assert load_config(cfg) == {"device": "parakeet"}
+
+
+def test_load_config_accepts_parakeet_cpu_device(tmp_path):
+    cfg = tmp_path / ".transcriber.toml"
+    cfg.write_text('device = "parakeet-cpu"\n')
+    assert load_config(cfg) == {"device": "parakeet-cpu"}
