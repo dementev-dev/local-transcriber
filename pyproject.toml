@@ -20,6 +20,7 @@ transcribe = "local_transcriber.cli:app"
 
 [dependency-groups]
 dev = [
+    "psutil>=7.2.2",
     "pytest",
 ]
 
