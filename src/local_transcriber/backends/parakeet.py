@@ -9,6 +9,9 @@ from typing import Any
 
 from local_transcriber.types import Segment, TranscribeResult
 
+from huggingface_hub import snapshot_download
+from huggingface_hub.errors import LocalEntryNotFoundError
+
 MODEL_REPO = "nvidia/parakeet-tdt-0.6b-v3"
 ONNX_ASR_MODEL_ALIAS = "nemo-parakeet-tdt-0.6b-v3"
 
@@ -34,7 +37,36 @@ class ParakeetBackend:
         compute_type: str,
         on_status: Callable[[str], None] | None = None,
     ) -> str:
-        raise NotImplementedError
+        if model_name not in SUPPORTED_MODEL_NAMES:
+            allowed = ", ".join(sorted(SUPPORTED_MODEL_NAMES))
+            raise ValueError(
+                f"Parakeet поддерживает только модели: {allowed}. "
+                f"Получено: '{model_name}'. Передайте --model parakeet или уберите "
+                f"'model' из .transcriber.toml."
+            )
+        if compute_type not in SUPPORTED_COMPUTE_TYPES:
+            raise ValueError(
+                f"Parakeet поддерживает только compute_type: int8 или float32. "
+                f"Получено: '{compute_type}'."
+            )
+
+        self.actual_compute_type = compute_type
+
+        # Cache-first: сначала проверяем локальный кэш (как faster_whisper / openvino бэкенды)
+        try:
+            _notify(on_status, f"Проверяю кэш модели Parakeet ({MODEL_REPO})...")
+            cached_path = Path(snapshot_download(MODEL_REPO, local_files_only=True))
+            _validate_model_dir(cached_path)
+            return str(cached_path)
+        except LocalEntryNotFoundError:
+            pass
+        except ValueError:
+            _notify(on_status, f"Кэш Parakeet неполный, докачиваю...")
+
+        _notify(on_status, f"Скачиваю модель Parakeet ({MODEL_REPO}) из Hugging Face...")
+        model_dir = Path(snapshot_download(MODEL_REPO, local_files_only=False))
+        _validate_model_dir(model_dir)
+        return str(model_dir)
 
     def create_model(
         self,
@@ -59,3 +91,11 @@ class ParakeetBackend:
 def _notify(on_status: Callable[[str], None] | None, message: str) -> None:
     if on_status is not None:
         on_status(message)
+
+
+def _validate_model_dir(model_dir: Path) -> None:
+    missing = [f for f in MODEL_REQUIRED_FILES if not (model_dir / f).exists()]
+    if missing:
+        raise ValueError(
+            f"Неполная Parakeet-модель в '{model_dir}': отсутствуют {', '.join(missing)}"
+        )
