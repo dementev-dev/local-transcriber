@@ -145,7 +145,7 @@ transcribe *.mp4 --force
 | `--model` | `-m` | `medium` | Модель Whisper |
 | `--language` | `-l` | `ru` | Язык (ru, en, auto и др.) |
 | `--output` | `-o` | `<файл>-transcript.md` | Путь к выходному файлу |
-| `--device` | `-d` | `auto` | Устройство (auto, cpu, cuda, openvino, openvino-gpu, openvino-cpu) |
+| `--device` | `-d` | `auto` | Устройство (auto, cpu, cuda, openvino, openvino-gpu, openvino-cpu, parakeet) |
 | `--compute-type` | — | float16 (CUDA) / int8 (OpenVINO GPU/CPU) / float32 (CPU) | Тип вычислений |
 | `--threads` | `-t` | 0 (авто) | Потоки CPU (рекомендуется = число физ. ядер) |
 | `--force` | `-f` | — | Перезаписать существующие транскрипты |
@@ -258,6 +258,41 @@ language = "en"
 </details>
 
 Подробнее: бенчмарки, OpenVINO, совместимость GPU, результаты тестирования — [docs/gpu.md](docs/gpu.md).
+
+## Parakeet TDT v3 (экспериментально)
+
+Альтернативный бэкенд на NVIDIA Parakeet TDT 0.6B v3 через ONNX Runtime — multilingual
+(25 европейских языков, включая русский), быстрый на CPU Intel/AMD.
+
+### Запуск
+
+```bash
+transcribe ваш_файл.mp3 --device parakeet
+```
+
+Первый запуск скачает:
+- Модель `nvidia/parakeet-tdt-0.6b-v3` (~670 MB int8 или ~2 GB fp32) в `~/.cache/huggingface/`.
+- Silero VAD (~15 MB) — обязателен для файлов > 20 сек.
+
+Последующие запуски — **оффлайн**.
+
+### Ограничения
+
+- `--language` **игнорируется** — Parakeet v3 определяет язык автоматически. В шапке
+  транскрипта — `**Язык**: multi (detected)`. Если указать `--language` явно — CLI напомнит.
+- Поддерживаемые `--compute-type`: `int8` (по умолчанию, ~670 MB) и `float32` (~2 GB).
+  Другие значения отвергаются.
+- Только модель `parakeet-tdt-0.6b-v3` (алиас `parakeet`). Если в вашем `.transcriber.toml`
+  стоит `model = "medium"` — добавьте `--model parakeet` к команде или уберите `model` из
+  конфига (иначе CLI вернёт ошибку).
+- В MVP — только CPU (ONNX Runtime CPU EP). DirectML / OpenVINO EP / CUDA — следующие фазы.
+- Ошибка Parakeet **не переключает** на Whisper CPU (silent fallback отключён) — вы получите
+  явную ошибку и сможете осознанно выбрать другой `--device`.
+
+### Сравнение производительности
+
+См. `docs/gpu.md`, раздел «Parakeet TDT v3 (ONNX Runtime CPU)» — актуальные числа wall-clock,
+RTFx и качества относительно Whisper medium.
 
 <details>
 <summary>Формат вывода</summary>
