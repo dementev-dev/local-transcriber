@@ -104,7 +104,48 @@ class ParakeetBackend:
         on_segment: Callable[[Segment], None] | None = None,
         on_status: Callable[[str], None] | None = None,
     ) -> TranscribeResult:
-        raise NotImplementedError
+        """Транскрибирует файл через onnx-asr + Silero VAD.
+
+        language=None/"auto" — ок; любое другое значение → warning (Parakeet игнорирует язык).
+        Возвращает TranscribeResult с language="multi" (независимо от пользовательского hint).
+        """
+        if language is not None and language != "auto":
+            warnings.warn(
+                "Parakeet игнорирует --language; язык определяется автоматически",
+                UserWarning,
+                stacklevel=2,
+            )
+
+        _notify(on_status, "Транскрибирую (Parakeet + Silero VAD)...")
+
+        raw_segments = model.recognize(str(file_path))
+
+        segments: list[Segment] = []
+        max_end = 0.0
+        for raw in raw_segments:
+            start = float(getattr(raw, "start", 0.0) or 0.0)
+            end = float(getattr(raw, "end", start) or start)
+            text = getattr(raw, "text", "") or ""
+            seg = Segment(start=start, end=end, text=text)
+            if on_segment is not None:
+                on_segment(seg)
+            segments.append(seg)
+            if end > max_end:
+                max_end = end
+            _notify(on_status, f"Parakeet: {len(segments)} сегм. ({end:.1f}с)")
+
+        # duration = конец последнего речевого сегмента после VAD, НЕ точная длина аудио-файла.
+        # Для заголовка транскрипта и форматирования таймкодов этого достаточно: расхождение —
+        # только на длину трейлинг-тишины. Декодировать аудио отдельно ради точного значения
+        # (как это делает OpenVINO-бэкенд через decode_audio) не стоит: ONNX-порт сам грузит
+        # файл внутри recognize(), повторное декодирование на 3-часовых файлах — заметная цена.
+        return TranscribeResult(
+            segments=segments,
+            language="multi",
+            language_probability=0.0,
+            duration=max_end,
+            device_used="",  # оркестратор проставит
+        )
 
 
 def _notify(on_status: Callable[[str], None] | None, message: str) -> None:

@@ -178,3 +178,120 @@ def test_create_model_zero_threads_omits_sess_options(tmp_path):
 
     kwargs = mock_ox.load_model.call_args.kwargs
     assert "sess_options" not in kwargs  # 0 = дефолт библиотеки, не трогаем
+
+
+# === transcribe ===
+
+
+def _segment_result(start, end, text):
+    """Фабрика onnx-asr SegmentResult-подобного объекта."""
+    seg = MagicMock()
+    seg.start = start
+    seg.end = end
+    seg.text = text
+    return seg
+
+
+def test_transcribe_produces_segments():
+    backend = ParakeetBackend()
+    model = MagicMock()
+    model.recognize.return_value = [
+        _segment_result(0.0, 1.5, " Привет"),
+        _segment_result(1.5, 3.0, " мир"),
+        _segment_result(3.0, 5.0, " это тест"),
+    ]
+
+    result = backend.transcribe(model, Path("test.mp3"), language=None)
+
+    assert len(result.segments) == 3
+    assert result.segments[0].start == 0.0
+    assert result.segments[0].text == " Привет"
+    assert result.language == "multi"
+    assert result.language_probability == 0.0
+
+
+def test_transcribe_accepts_iterator_results():
+    backend = ParakeetBackend()
+    model = MagicMock()
+
+    def gen():
+        yield _segment_result(0.0, 1.0, "a")
+        yield _segment_result(1.0, 2.0, "b")
+
+    model.recognize.return_value = gen()
+
+    result = backend.transcribe(model, Path("test.mp3"), language=None)
+    assert len(result.segments) == 2
+
+
+def test_transcribe_calls_on_segment():
+    backend = ParakeetBackend()
+    model = MagicMock()
+    model.recognize.return_value = [
+        _segment_result(0.0, 1.0, "one"),
+        _segment_result(1.0, 2.0, "two"),
+    ]
+    callback = MagicMock()
+
+    backend.transcribe(model, Path("test.mp3"), language=None, on_segment=callback)
+
+    assert callback.call_count == 2
+
+
+def test_transcribe_warns_on_explicit_language():
+    backend = ParakeetBackend()
+    model = MagicMock()
+    model.recognize.return_value = []
+
+    with pytest.warns(UserWarning, match="Parakeet игнорирует"):
+        backend.transcribe(model, Path("test.mp3"), language="ru")
+
+
+def test_transcribe_does_not_warn_on_none_language():
+    backend = ParakeetBackend()
+    model = MagicMock()
+    model.recognize.return_value = []
+
+    import warnings as wmod
+
+    with wmod.catch_warnings(record=True) as caught:
+        wmod.simplefilter("always")
+        backend.transcribe(model, Path("test.mp3"), language=None)
+
+    assert not any("Parakeet" in str(w.message) for w in caught)
+
+
+def test_transcribe_computes_duration_from_segments():
+    backend = ParakeetBackend()
+    model = MagicMock()
+    model.recognize.return_value = [
+        _segment_result(0.0, 10.0, "a"),
+        _segment_result(10.5, 25.0, "b"),
+    ]
+
+    result = backend.transcribe(model, Path("test.mp3"), language=None)
+    assert result.duration == 25.0  # max(end)
+
+
+def test_transcribe_empty_segments_returns_zero_duration():
+    backend = ParakeetBackend()
+    model = MagicMock()
+    model.recognize.return_value = []
+
+    result = backend.transcribe(model, Path("test.mp3"), language=None)
+    assert result.duration == 0.0
+    assert result.segments == []
+    assert result.language == "multi"
+
+
+def test_transcribe_calls_on_status():
+    backend = ParakeetBackend()
+    model = MagicMock()
+    model.recognize.return_value = [
+        _segment_result(0.0, 1.0, "one"),
+    ]
+    status_cb = MagicMock()
+
+    backend.transcribe(model, Path("test.mp3"), language=None, on_status=status_cb)
+
+    assert status_cb.call_count >= 1  # хотя бы одно status-сообщение
