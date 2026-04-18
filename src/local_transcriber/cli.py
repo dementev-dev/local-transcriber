@@ -40,6 +40,8 @@ def _format_device_info(device_used: str) -> str:
         return f"OpenVINO ({gpu_name or 'Intel GPU'})"
     if device_used in ("openvino", "openvino-cpu"):
         return "OpenVINO (CPU)"
+    if device_used == "parakeet-cpu":
+        return "Parakeet (CPU via ONNX Runtime)"
     return "CPU"
 
 
@@ -81,6 +83,7 @@ def main(
         defaults = apply_device_defaults(defaults, resolved_device, cli_values, config)
 
         ct_explicit = compute_type is not None or "compute_type" in config
+        language_explicit_cli = language is not None  # только CLI — warning для Parakeet
 
         expanded = expand_globs(files)
         if not expanded:
@@ -93,9 +96,11 @@ def main(
             raise SystemExit(1)
 
         if is_batch:
-            _run_batch(expanded, defaults, verbose, force, ct_explicit, cpu_threads=threads)
+            _run_batch(expanded, defaults, verbose, force, ct_explicit, cpu_threads=threads,
+                       language_explicit_cli=language_explicit_cli)
         else:
-            _run_single(expanded[0], defaults, output, verbose, ct_explicit, cpu_threads=threads)
+            _run_single(expanded[0], defaults, output, verbose, ct_explicit, cpu_threads=threads,
+                        language_explicit_cli=language_explicit_cli)
     except KeyboardInterrupt:
         console.print("\nПрервано пользователем.", style="yellow")
         raise SystemExit(130)
@@ -134,6 +139,7 @@ def _run_single(
     verbose: bool,
     compute_type_explicit: bool = False,
     cpu_threads: int = 0,
+    language_explicit_cli: bool = False,
 ) -> None:
     """Пайплайн одного файла: валидация → модель → транскрипция → запись."""
     start = time.monotonic()
@@ -141,6 +147,12 @@ def _run_single(
     validated_file = validate_input_file(file)
     requested_device = defaults["device"]
     resolved_device = detect_device(requested_device)
+    is_parakeet = resolved_device.startswith("parakeet")
+    if is_parakeet and language_explicit_cli:
+        console.print(
+            "Parakeet игнорирует --language; язык определяется автоматически",
+            style="yellow",
+        )
     strict = requested_device != "auto"
     output_path = build_output_path(validated_file, output)
 
@@ -156,8 +168,9 @@ def _run_single(
         cpu_threads=cpu_threads,
     )
     actual_ct = getattr(backend, "actual_compute_type", defaults["compute_type"]) or defaults["compute_type"]
+    effective_model = getattr(backend, "effective_model_name", None) or defaults["model"]
     console.print(
-        f"Модель: [bold]{defaults['model']}[/bold]  "
+        f"Модель: [bold]{effective_model}[/bold]  "
         f"Устройство: [bold]{actual_device}[/bold]  "
         f"Compute: [bold]{actual_ct}[/bold]"
     )
@@ -204,12 +217,15 @@ def _run_single(
         )
 
     device_info = _format_device_info(result.device_used)
-    language_mode = "detected" if defaults["language"] == "auto" else "forced"
+    if tfr.actual_device.startswith("parakeet"):
+        language_mode = "detected"  # Parakeet всегда auto-detect (multi-language)
+    else:
+        language_mode = "detected" if defaults["language"] == "auto" else "forced"
 
     content = format_transcript(
         result=result,
         source_filename=validated_file.name,
-        model_name=defaults["model"],
+        model_name=effective_model,
         device_info=device_info,
         language_mode=language_mode,
     )
@@ -227,6 +243,7 @@ def _run_batch(
     force: bool,
     compute_type_explicit: bool = False,
     cpu_threads: int = 0,
+    language_explicit_cli: bool = False,
 ) -> None:
     """Трёхфазный батч-пайплайн: prescan → загрузка модели → транскрипция."""
     # Phase 1: Prescan — fail-fast + skip до загрузки модели (экономим ~2-5 сек)
@@ -259,6 +276,12 @@ def _run_batch(
     # Phase 2: Load model (ensure + create в одном вызове)
     requested_device = defaults["device"]
     resolved_device = detect_device(requested_device)
+    is_parakeet = resolved_device.startswith("parakeet")
+    if is_parakeet and language_explicit_cli:
+        console.print(
+            "Parakeet игнорирует --language; язык определяется автоматически",
+            style="yellow",
+        )
     strict = requested_device != "auto"
     model_obj, actual_device, backend, model_path = load_model(
         defaults["model"], resolved_device, defaults["compute_type"],
@@ -266,6 +289,7 @@ def _run_batch(
         compute_type_explicit=compute_type_explicit,
         cpu_threads=cpu_threads,
     )
+    effective_model = getattr(backend, "effective_model_name", None) or defaults["model"]
 
     if actual_device == "openvino-gpu" and defaults["model"] != "large-v3":
         console.print(
@@ -289,7 +313,10 @@ def _run_batch(
     # Phase 3: Transcribe
     processed = 0
     failed = 0
-    language_mode = "detected" if defaults["language"] == "auto" else "forced"
+    if actual_device.startswith("parakeet"):
+        language_mode = "detected"  # Parakeet всегда auto-detect (multi-language)
+    else:
+        language_mode = "detected" if defaults["language"] == "auto" else "forced"
 
     batch_start = time.monotonic()
 
@@ -341,7 +368,7 @@ def _run_batch(
             content = format_transcript(
                 result=result,
                 source_filename=file.name,
-                model_name=defaults["model"],
+                model_name=effective_model,
                 device_info=device_info,
                 language_mode=language_mode,
             )

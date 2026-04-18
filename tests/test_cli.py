@@ -921,3 +921,209 @@ def test_cli_threads_negative_rejected(tmp_path):
     audio.write_bytes(b"fake")
     out = runner.invoke(app, [str(audio), "--threads", "-1"])
     assert out.exit_code != 0
+
+
+# === Regression: Whisper headers not changed ===
+
+
+def test_cli_whisper_transcript_header_has_language_forced(tmp_path):
+    """Регрессия: для --device cpu --language ru шапка содержит 'ru (forced)'."""
+    audio = tmp_path / "test.mp3"
+    audio.write_bytes(b"fake")
+
+    captured = {}
+    def capture(content, path):
+        captured["content"] = content
+
+    result = _make_result(language="ru", device_used="cpu")
+    model = _make_model()
+    backend = _make_backend()
+    backend.effective_model_name = None  # Whisper не ставит это
+    tfr = _make_tfr(result=result, model=model, actual_device="cpu", backend=backend)
+
+    with (
+        patch("local_transcriber.cli.load_config", return_value={}),
+        patch("local_transcriber.cli.validate_input_file", return_value=audio),
+        patch("local_transcriber.cli.detect_device", return_value="cpu"),
+        patch("local_transcriber.cli.load_model", return_value=(model, "cpu", backend, "/models/medium")),
+        patch("local_transcriber.cli._transcribe_file", return_value=tfr),
+        patch("local_transcriber.cli.write_transcript", side_effect=capture),
+    ):
+        out = runner.invoke(app, [str(audio), "--language", "ru"])
+
+    assert out.exit_code == 0
+    assert "**Язык**: ru (forced)" in captured["content"]
+    assert "**Модель**: medium" in captured["content"]
+
+
+def test_cli_whisper_auto_language_header_has_detected(tmp_path):
+    audio = tmp_path / "test.mp3"
+    audio.write_bytes(b"fake")
+    captured = {}
+    def capture(content, path):
+        captured["content"] = content
+
+    result = _make_result(language="en", device_used="cpu")
+    model = _make_model()
+    backend = _make_backend()
+    backend.effective_model_name = None
+    tfr = _make_tfr(result=result, model=model, actual_device="cpu", backend=backend)
+
+    with (
+        patch("local_transcriber.cli.load_config", return_value={}),
+        patch("local_transcriber.cli.validate_input_file", return_value=audio),
+        patch("local_transcriber.cli.detect_device", return_value="cpu"),
+        patch("local_transcriber.cli.load_model", return_value=(model, "cpu", backend, "/models/medium")),
+        patch("local_transcriber.cli._transcribe_file", return_value=tfr),
+        patch("local_transcriber.cli.write_transcript", side_effect=capture),
+    ):
+        out = runner.invoke(app, [str(audio), "--language", "auto"])
+
+    assert out.exit_code == 0
+    assert "**Язык**: en (detected)" in captured["content"]
+
+
+# === Parakeet-specific CLI ===
+
+
+def _make_parakeet_backend(effective_name="parakeet-tdt-0.6b-v3"):
+    backend = MagicMock(name="ParakeetBackend")
+    backend.effective_model_name = effective_name
+    backend.actual_compute_type = "int8"
+    return backend
+
+
+def test_cli_parakeet_transcript_header_multi_detected(tmp_path):
+    audio = tmp_path / "test.mp3"
+    audio.write_bytes(b"fake")
+    captured = {}
+    def capture(content, path):
+        captured["content"] = content
+
+    result = _make_result(language="multi", device_used="parakeet-cpu")
+    model = _make_model()
+    backend = _make_parakeet_backend()
+    tfr = _make_tfr(result=result, model=model, actual_device="parakeet-cpu", backend=backend)
+
+    with (
+        patch("local_transcriber.cli.load_config", return_value={}),
+        patch("local_transcriber.cli.validate_input_file", return_value=audio),
+        patch("local_transcriber.cli.detect_device", return_value="parakeet-cpu"),
+        patch("local_transcriber.cli.load_model", return_value=(model, "parakeet-cpu", backend, "/models/parakeet")),
+        patch("local_transcriber.cli._transcribe_file", return_value=tfr),
+        patch("local_transcriber.cli.write_transcript", side_effect=capture),
+    ):
+        out = runner.invoke(app, [str(audio), "--device", "parakeet"])
+
+    assert out.exit_code == 0
+    assert "**Язык**: multi (detected)" in captured["content"]
+    assert "**Модель**: parakeet-tdt-0.6b-v3" in captured["content"]
+
+
+def test_cli_parakeet_effective_model_overrides_config_model(tmp_path):
+    """Когда config имеет model=medium, но user'ская команда — --device parakeet --model parakeet,
+    шапка транскрипта должна показать parakeet-tdt-0.6b-v3."""
+    audio = tmp_path / "test.mp3"
+    audio.write_bytes(b"fake")
+    captured = {}
+    def capture(content, path):
+        captured["content"] = content
+
+    result = _make_result(language="multi", device_used="parakeet-cpu")
+    model = _make_model()
+    backend = _make_parakeet_backend()
+    tfr = _make_tfr(result=result, model=model, actual_device="parakeet-cpu", backend=backend)
+
+    with (
+        patch("local_transcriber.cli.load_config", return_value={"model": "medium"}),
+        patch("local_transcriber.cli.validate_input_file", return_value=audio),
+        patch("local_transcriber.cli.detect_device", return_value="parakeet-cpu"),
+        patch("local_transcriber.cli.load_model", return_value=(model, "parakeet-cpu", backend, "/models/parakeet")),
+        patch("local_transcriber.cli._transcribe_file", return_value=tfr),
+        patch("local_transcriber.cli.write_transcript", side_effect=capture),
+    ):
+        out = runner.invoke(app, [str(audio), "--device", "parakeet", "--model", "parakeet"])
+
+    assert out.exit_code == 0
+    assert "**Модель**: parakeet-tdt-0.6b-v3" in captured["content"]
+
+
+def test_cli_parakeet_warns_on_explicit_cli_language(tmp_path):
+    """Явный --language с --device parakeet → warning в stderr."""
+    audio = tmp_path / "test.mp3"
+    audio.write_bytes(b"fake")
+
+    result = _make_result(language="multi", device_used="parakeet-cpu")
+    model = _make_model()
+    backend = _make_parakeet_backend()
+    tfr = _make_tfr(result=result, model=model, actual_device="parakeet-cpu", backend=backend)
+
+    with (
+        patch("local_transcriber.cli.load_config", return_value={}),
+        patch("local_transcriber.cli.validate_input_file", return_value=audio),
+        patch("local_transcriber.cli.detect_device", return_value="parakeet-cpu"),
+        patch("local_transcriber.cli.load_model", return_value=(model, "parakeet-cpu", backend, "/models/parakeet")),
+        patch("local_transcriber.cli._transcribe_file", return_value=tfr),
+        patch("local_transcriber.cli.write_transcript"),
+    ):
+        out = runner.invoke(app, [str(audio), "--device", "parakeet", "--language", "en"])
+
+    assert out.exit_code == 0
+    assert "Parakeet игнорирует" in out.stderr or "Parakeet игнорирует" in out.output
+
+
+def test_cli_parakeet_does_not_warn_on_config_language(tmp_path):
+    """Language из конфига без явного CLI — warning НЕ срабатывает."""
+    audio = tmp_path / "test.mp3"
+    audio.write_bytes(b"fake")
+
+    result = _make_result(language="multi", device_used="parakeet-cpu")
+    model = _make_model()
+    backend = _make_parakeet_backend()
+    tfr = _make_tfr(result=result, model=model, actual_device="parakeet-cpu", backend=backend)
+
+    with (
+        patch("local_transcriber.cli.load_config", return_value={"language": "ru"}),
+        patch("local_transcriber.cli.validate_input_file", return_value=audio),
+        patch("local_transcriber.cli.detect_device", return_value="parakeet-cpu"),
+        patch("local_transcriber.cli.load_model", return_value=(model, "parakeet-cpu", backend, "/models/parakeet")),
+        patch("local_transcriber.cli._transcribe_file", return_value=tfr),
+        patch("local_transcriber.cli.write_transcript"),
+    ):
+        out = runner.invoke(app, [str(audio), "--device", "parakeet"])
+
+    assert out.exit_code == 0
+    assert "Parakeet игнорирует" not in out.stderr and "Parakeet игнорирует" not in out.output
+
+
+def test_cli_parakeet_device_info_shows_onnx():
+    assert _format_device_info("parakeet-cpu") == "Parakeet (CPU via ONNX Runtime)"
+
+
+def test_cli_parakeet_config_model_mismatch_without_override_prints_friendly_error(tmp_path):
+    """config: model=medium, запуск --device parakeet БЕЗ --model → ValueError из
+    ensure_model_available пробрасывается; CLI должен напечатать текст ошибки
+    без traceback (exit code 1)."""
+    audio = tmp_path / "test.mp3"
+    audio.write_bytes(b"fake")
+
+    def failing_load_model(*args, **kwargs):
+        raise ValueError(
+            "Parakeet поддерживает только модели: parakeet, parakeet-tdt-0.6b-v3. "
+            "Получено: 'medium'. Передайте --model parakeet или уберите "
+            "'model' из .transcriber.toml."
+        )
+
+    with (
+        patch("local_transcriber.cli.load_config", return_value={"model": "medium"}),
+        patch("local_transcriber.cli.validate_input_file", return_value=audio),
+        patch("local_transcriber.cli.detect_device", return_value="parakeet-cpu"),
+        patch("local_transcriber.cli.load_model", side_effect=failing_load_model),
+    ):
+        out = runner.invoke(app, [str(audio), "--device", "parakeet"])
+
+    assert out.exit_code == 1
+    combined = (out.stderr or "") + (out.output or "")
+    assert "Parakeet поддерживает только" in combined
+    assert "--model parakeet" in combined
+    assert "Traceback" not in combined
