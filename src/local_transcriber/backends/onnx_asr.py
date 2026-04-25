@@ -36,6 +36,32 @@ class OnnxAsrBackend:
         self._resolved_model_id = self._resolve_model(model_name)
         return self._resolved_model_id
 
+    def create_model(
+        self,
+        model_path: str,
+        device: str,
+        compute_type: str,
+        cpu_threads: int = 0,
+    ) -> Any:
+        """Creates onnx-asr model with VAD.
+
+        model_path: onnx-asr model identifier (e.g. "gigaam-v3-ctc").
+        compute_type: "int8", "fp16", or "float32" — passed as quantization.
+        cpu_threads: not used by onnx-asr (onnxruntime manages threads internally).
+        """
+        import onnx_asr
+
+        ct = compute_type if compute_type in ("int8", "fp16", "float32") else "int8"
+
+        model = onnx_asr.load_model(
+            model=model_path,
+            quantization=ct,
+            cpu_preprocessing=True,
+        )
+        vad = onnx_asr.load_vad("silero")
+        self._vad = vad
+        return model.with_vad(vad)
+
     def _resolve_model(self, model_name: str) -> str:
         """Resolve alias to onnx-asr model name. Raw names pass through."""
         if model_name in MODEL_ALIASES:
