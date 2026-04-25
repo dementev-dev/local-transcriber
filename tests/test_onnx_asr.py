@@ -104,6 +104,79 @@ class TestCreateModel:
 
         assert calls == ["fp16"]
 
+    def test_float32_maps_to_none(self, monkeypatch):
+        """compute_type='float32' маппится в quantization=None (unquantized).
+
+        onnx-asr использует quantization как суффикс файла; для float32 нужен None,
+        строка "float32" приведёт к попытке загрузить несуществующий файл.
+        """
+        calls = []
+
+        def fake_load_model(model=None, quantization="MISSING", **kwargs):
+            calls.append(quantization)
+            return FakeAsrAdapter()
+
+        class FakeAsrAdapter:
+            def with_vad(self, vad):
+                return self
+
+        monkeypatch.setattr("onnx_asr.load_model", fake_load_model)
+        monkeypatch.setattr("onnx_asr.load_vad", lambda model, **kw: None)
+
+        backend = OnnxAsrBackend()
+        backend.create_model("gigaam-v3-ctc", "onnx", "float32")
+
+        assert calls == [None]
+
+    def test_fp32_maps_to_none(self, monkeypatch):
+        """compute_type='fp32' тоже маппится в quantization=None."""
+        calls = []
+
+        def fake_load_model(model=None, quantization="MISSING", **kwargs):
+            calls.append(quantization)
+            return FakeAsrAdapter()
+
+        class FakeAsrAdapter:
+            def with_vad(self, vad):
+                return self
+
+        monkeypatch.setattr("onnx_asr.load_model", fake_load_model)
+        monkeypatch.setattr("onnx_asr.load_vad", lambda model, **kw: None)
+
+        backend = OnnxAsrBackend()
+        backend.create_model("gigaam-v3-ctc", "onnx", "fp32")
+
+        assert calls == [None]
+
+    def test_float16_alias_maps_to_fp16(self, monkeypatch):
+        """compute_type='float16' (CUDA-naming) маппится в onnx-asr 'fp16'."""
+        calls = []
+
+        def fake_load_model(model=None, quantization=None, **kwargs):
+            calls.append(quantization)
+            return FakeAsrAdapter()
+
+        class FakeAsrAdapter:
+            def with_vad(self, vad):
+                return self
+
+        monkeypatch.setattr("onnx_asr.load_model", fake_load_model)
+        monkeypatch.setattr("onnx_asr.load_vad", lambda model, **kw: None)
+
+        backend = OnnxAsrBackend()
+        backend.create_model("gigaam-v3-ctc", "onnx", "float16")
+
+        assert calls == ["fp16"]
+
+    def test_unknown_compute_type_raises(self, monkeypatch):
+        """Неподдерживаемый compute_type → ValueError, не silent fallback."""
+        monkeypatch.setattr("onnx_asr.load_model", lambda **kw: None)
+        monkeypatch.setattr("onnx_asr.load_vad", lambda model, **kw: None)
+
+        backend = OnnxAsrBackend()
+        with pytest.raises(ValueError, match="Неподдерживаемый compute_type"):
+            backend.create_model("gigaam-v3-ctc", "onnx", "int8_float32")
+
 
 class TestTranscribe:
     def test_transcribe_collects_segments(self, monkeypatch, tmp_path):

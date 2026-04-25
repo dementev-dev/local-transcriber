@@ -15,6 +15,32 @@ MODEL_ALIASES: dict[str, str] = {
 
 SUPPORTED_ALIASES = ", ".join(MODEL_ALIASES)
 
+# compute_type проекта → onnx-asr quantization (file suffix; None = unquantized).
+_QUANTIZATION_MAP: dict[str, str | None] = {
+    "int8": "int8",
+    "fp16": "fp16",
+    "float16": "fp16",
+    "float32": None,
+    "fp32": None,
+}
+
+
+def _normalize_quantization(compute_type: str) -> str | None:
+    """Маппит compute_type проекта в значение onnx-asr ``quantization``.
+
+    onnx-asr использует ``quantization`` как суффикс имени файла модели:
+    ``int8``/``fp16`` подгружают квантизованные веса, ``None`` — unquantized
+    (float32). Передача ``"float32"`` строкой пытается найти несуществующий
+    файл с суффиксом ``_float32`` и приводит к ошибке загрузки.
+    """
+    if compute_type not in _QUANTIZATION_MAP:
+        supported = ", ".join(sorted(_QUANTIZATION_MAP))
+        raise ValueError(
+            f"Неподдерживаемый compute_type '{compute_type}' для onnx-asr. "
+            f"Допустимо: {supported}."
+        )
+    return _QUANTIZATION_MAP[compute_type]
+
 
 class OnnxAsrBackend:
     """Бэкенд транскрипции через onnx-asr (ONNX Runtime)."""
@@ -48,17 +74,16 @@ class OnnxAsrBackend:
     ) -> Any:
         """Creates onnx-asr model with VAD.
 
-        model_path: onnx-asr model identifier (e.g. "gigaam-v3-ctc").
-        compute_type: "int8", "fp16", or "float32" — passed as quantization.
-        cpu_threads: not used by onnx-asr (onnxruntime manages threads internally).
+        compute_type маппится в onnx-asr ``quantization`` — это суффикс файла
+        модели; для unquantized (float32/fp32) нужно None, не строку.
         """
         import onnx_asr
 
-        ct = compute_type if compute_type in ("int8", "fp16", "float32") else "int8"
+        quantization = _normalize_quantization(compute_type)
 
         model = onnx_asr.load_model(
             model=model_path,
-            quantization=ct,
+            quantization=quantization,
         )
         vad = onnx_asr.load_vad("silero")
         self._vad = vad
