@@ -214,6 +214,13 @@ class TestTranscribe:
         assert result.duration == 1.0
 
 
+class TestBackendRegistration:
+    def test_get_backend_returns_onnx_backend(self):
+        from local_transcriber.backends import get_backend
+        backend = get_backend("onnx")
+        assert isinstance(backend, OnnxAsrBackend)
+
+
 class TestModelAliases:
     def test_gigaam_v3_resolves(self):
         backend = OnnxAsrBackend()
