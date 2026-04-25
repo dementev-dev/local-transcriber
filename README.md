@@ -8,7 +8,7 @@ transcribe meeting.mp4
 ```
 
 - **Полностью локально** — данные не покидают машину
-- **Авто-ускорение** — NVIDIA CUDA, Intel GPU (OpenVINO), OpenVINO CPU или CPU fallback
+- **Авто-ускорение** — NVIDIA CUDA, Intel GPU (OpenVINO), ONNX (CPU), OpenVINO CPU или CPU fallback
 - **Батч-режим** — обработка нескольких файлов за один вызов
 - **Markdown с таймкодами** — удобен для суммаризации ИИ
 - **Аудио и видео** — mp3, wav, mp4, mkv и [другие форматы](#поддерживаемые-форматы)
@@ -114,6 +114,12 @@ transcribe podcast.wav --model large-v3 --compute-type float16
 # Максимальное качество на Intel GPU
 transcribe podcast.wav --model large-v3 --device openvino-gpu
 
+# Максимальная скорость на CPU (русский)
+transcribe meeting.mp4 --device onnx --model gigaam-v3
+
+# Мультиязычный CPU (25 языков, медленнее)
+transcribe podcast.wav --device onnx --model parakeet-v3 --language auto
+
 # Сохранить в конкретный файл
 transcribe interview.m4a --output result.md
 ```
@@ -145,8 +151,8 @@ transcribe *.mp4 --force
 | `--model` | `-m` | `medium` | Модель Whisper |
 | `--language` | `-l` | `ru` | Язык (ru, en, auto и др.) |
 | `--output` | `-o` | `<файл>-transcript.md` | Путь к выходному файлу |
-| `--device` | `-d` | `auto` | Устройство (auto, cpu, cuda, openvino, openvino-gpu, openvino-cpu) |
-| `--compute-type` | — | float16 (CUDA) / int8 (OpenVINO GPU/CPU) / float32 (CPU) | Тип вычислений |
+| `--device` | `-d` | `auto` | Устройство (auto, cpu, cuda, openvino, openvino-gpu, openvino-cpu, onnx) |
+| `--compute-type` | — | float16 (CUDA) / int8 (OpenVINO/ONNX) / float32 (CPU) | Тип вычислений |
 | `--threads` | `-t` | 0 (авто) | Потоки CPU (рекомендуется = число физ. ядер) |
 | `--force` | `-f` | — | Перезаписать существующие транскрипты |
 | `--verbose` | `-v` | — | Подробный вывод |
@@ -158,6 +164,7 @@ transcribe *.mp4 --force
 | CPU | ✅ | ✅ | ✅ |
 | OpenVINO (x86 CPU) | ✅ авто | — | ✅ авто |
 | OpenVINO (Intel GPU) | ✅ авто | — | ✅ авто |
+| ONNX (CPU) | ✅ явно | ✅ явно | ✅ явно |
 | GPU (NVIDIA) | ✅ авто | — | ✅ (нужен CUDA 12) |
 
 <details>
@@ -210,11 +217,11 @@ language = "en"
 
 Дефолты зависят от устройства:
 
-| Параметр | CUDA | OpenVINO (GPU) | OpenVINO (CPU) | CPU |
-|----------|------|----------------|----------------|-----|
-| model | medium | medium | medium | medium |
-| compute_type | float16 | int8 | int8 | float32 |
-| language | ru | ru | ru | ru |
+| Параметр | CUDA | OpenVINO (GPU) | OpenVINO (CPU) | ONNX | CPU |
+|----------|------|----------------|----------------|------|-----|
+| model | medium | medium | medium | gigaam-v3 | medium |
+| compute_type | float16 | int8 | int8 | int8 | float32 |
+| language | ru | ru | ru | ru | ru |
 
 ## Модели и GPU
 
