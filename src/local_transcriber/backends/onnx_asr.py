@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
+
+from local_transcriber.types import Segment, TranscribeResult
 
 MODEL_ALIASES: dict[str, str] = {
     "gigaam-v3": "gigaam-v3-ctc",
@@ -62,6 +65,52 @@ class OnnxAsrBackend:
         self._vad = vad
         return model.with_vad(vad)
 
+    def transcribe(
+        self,
+        model: Any,
+        file_path: Path,
+        language: str | None,
+        on_segment: Callable[[Segment], None] | None = None,
+        on_status: Callable[[str], None] | None = None,
+    ) -> TranscribeResult:
+        """Transcribes audio file using onnx-asr model with VAD.
+
+        model: result of create_model() — a SegmentResultsAsrAdapter.
+        file_path: path to audio/video file (any format supported by faster-whisper decode).
+        language: language code (e.g. "ru", "en") — only meaningful for multilingual models.
+        """
+        from faster_whisper import decode_audio
+
+        _notify(on_status, "Загружаю аудио...")
+        audio_array = decode_audio(str(file_path), sampling_rate=16000)
+        duration = len(audio_array) / 16000.0
+
+        _notify(on_status, "Транскрибирую (onnx-asr)...")
+        segments: list[Segment] = []
+        detected_language = language or "unknown"
+
+        for vad_seg in model.recognize(audio_array, 16000, language=language):
+            seg = Segment(
+                start=max(0.0, vad_seg.start_ts),
+                end=max(0.0, vad_seg.end_ts),
+                text=vad_seg.text,
+            )
+            if on_segment is not None:
+                on_segment(seg)
+            segments.append(seg)
+            _notify(
+                on_status,
+                f"Транскрибирую (onnx-asr)... [{len(segments)} сегм.]",
+            )
+
+        return TranscribeResult(
+            segments=segments,
+            language=detected_language,
+            language_probability=1.0 if language else 0.0,
+            duration=duration,
+            device_used="",  # оркестратор проставит
+        )
+
     def _resolve_model(self, model_name: str) -> str:
         """Resolve alias to onnx-asr model name. Raw names pass through."""
         if model_name in MODEL_ALIASES:
@@ -74,3 +123,8 @@ class OnnxAsrBackend:
             f"Доступные алиасы: {SUPPORTED_ALIASES}. "
             f"Либо укажите полное имя модели onnx-asr."
         )
+
+
+def _notify(on_status: Callable[[str], None] | None, message: str) -> None:
+    if on_status is not None:
+        on_status(message)

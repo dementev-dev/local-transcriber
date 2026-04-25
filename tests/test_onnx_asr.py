@@ -1,7 +1,19 @@
 """Tests for onnx-asr backend."""
 
 import pytest
+from pathlib import Path
+
 from local_transcriber.backends.onnx_asr import OnnxAsrBackend, MODEL_ALIASES
+from local_transcriber.types import Segment, TranscribeResult
+
+
+class FakeVadSegment:
+    """Mimics onnx-asr SegmentResult."""
+
+    def __init__(self, start_ts, end_ts, text):
+        self.start_ts = start_ts
+        self.end_ts = end_ts
+        self.text = text
 
 
 class TestEnsureModelAvailable:
@@ -93,6 +105,113 @@ class TestCreateModel:
         backend.create_model("parakeet-v3", "onnx", "fp16")
 
         assert calls == ["fp16"]
+
+
+class TestTranscribe:
+    def test_transcribe_collects_segments(self, monkeypatch, tmp_path):
+        """Verify transcribe maps VAD segments to project Segments."""
+        wav_file = tmp_path / "test.wav"
+        wav_file.write_bytes(b"fake audio")
+
+        audio_samples = [0.0] * 16000  # 1 second of silence
+
+        def fake_decode_audio(path, sampling_rate=16000):
+            import numpy as np
+            return np.array(audio_samples, dtype=np.float32)
+
+        class FakeModel:
+            def recognize(self, waveform, sample_rate, language=None):
+                yield FakeVadSegment(0.0, 1.0, "hello")
+                yield FakeVadSegment(1.0, 2.5, "world")
+
+        monkeypatch.setattr("faster_whisper.decode_audio", fake_decode_audio)
+
+        backend = OnnxAsrBackend()
+        backend.actual_compute_type = "int8"
+        result = backend.transcribe(
+            FakeModel(), wav_file, language=None,
+        )
+
+        assert isinstance(result, TranscribeResult)
+        assert len(result.segments) == 2
+        assert result.segments[0] == Segment(start=0.0, end=1.0, text="hello")
+        assert result.segments[1] == Segment(start=1.0, end=2.5, text="world")
+        assert result.duration == 1.0  # 16000 samples / 16000 Hz
+
+    def test_transcribe_calls_on_segment(self, monkeypatch, tmp_path):
+        """Verify on_segment callback is invoked per segment."""
+        wav_file = tmp_path / "test.wav"
+        wav_file.write_bytes(b"fake audio")
+
+        def fake_decode_audio(path, sampling_rate=16000):
+            import numpy as np
+            return np.array([0.0] * 16000, dtype=np.float32)
+
+        segments_captured = []
+
+        class FakeModel:
+            def recognize(self, waveform, sample_rate, language=None):
+                yield FakeVadSegment(0.0, 2.0, "one")
+                yield FakeVadSegment(2.0, 4.0, "two")
+
+        monkeypatch.setattr("faster_whisper.decode_audio", fake_decode_audio)
+
+        backend = OnnxAsrBackend()
+        result = backend.transcribe(
+            FakeModel(), wav_file, language=None,
+            on_segment=lambda s: segments_captured.append(s),
+        )
+
+        assert len(segments_captured) == 2
+        assert segments_captured[0].text == "one"
+        assert segments_captured[1].text == "two"
+
+    def test_transcribe_passes_language(self, monkeypatch, tmp_path):
+        """Verify language is passed to recognize()."""
+        wav_file = tmp_path / "test.wav"
+        wav_file.write_bytes(b"fake audio")
+
+        def fake_decode_audio(path, sampling_rate=16000):
+            import numpy as np
+            return np.array([0.0] * 16000, dtype=np.float32)
+
+        lang_received = []
+
+        class FakeModel:
+            def recognize(self, waveform, sample_rate, language=None):
+                lang_received.append(language)
+                yield FakeVadSegment(0.0, 1.0, "text")
+
+        monkeypatch.setattr("faster_whisper.decode_audio", fake_decode_audio)
+
+        backend = OnnxAsrBackend()
+        backend.transcribe(FakeModel(), wav_file, language="ru")
+
+        assert lang_received == ["ru"]
+
+    def test_transcribe_empty_audio(self, monkeypatch, tmp_path):
+        """Verify zero segments for silent audio."""
+        wav_file = tmp_path / "test.wav"
+        wav_file.write_bytes(b"fake audio")
+
+        def fake_decode_audio(path, sampling_rate=16000):
+            import numpy as np
+            return np.array([0.0] * 16000, dtype=np.float32)
+
+        class FakeModel:
+            def recognize(self, waveform, sample_rate, language=None):
+                # No segments yielded
+                if False:
+                    yield
+
+        monkeypatch.setattr("faster_whisper.decode_audio", fake_decode_audio)
+
+        backend = OnnxAsrBackend()
+        result = backend.transcribe(FakeModel(), wav_file, language=None)
+
+        assert len(result.segments) == 0
+        assert result.language == "unknown"
+        assert result.duration == 1.0
 
 
 class TestModelAliases:
