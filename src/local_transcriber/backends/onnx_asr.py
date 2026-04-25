@@ -59,7 +59,6 @@ class OnnxAsrBackend:
         model = onnx_asr.load_model(
             model=model_path,
             quantization=ct,
-            cpu_preprocessing=True,
         )
         vad = onnx_asr.load_vad("silero")
         self._vad = vad
@@ -89,10 +88,10 @@ class OnnxAsrBackend:
         segments: list[Segment] = []
         detected_language = language or "unknown"
 
-        for vad_seg in model.recognize(audio_array, 16000, language=language):
+        for vad_seg in model.recognize(audio_array, sample_rate=16000, language=language):
             seg = Segment(
-                start=max(0.0, vad_seg.start_ts),
-                end=max(0.0, vad_seg.end_ts),
+                start=max(0.0, vad_seg.start),
+                end=max(0.0, vad_seg.end),
                 text=vad_seg.text,
             )
             if on_segment is not None:

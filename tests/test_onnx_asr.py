@@ -10,9 +10,9 @@ from local_transcriber.types import Segment, TranscribeResult
 class FakeVadSegment:
     """Mimics onnx-asr SegmentResult."""
 
-    def __init__(self, start_ts, end_ts, text):
-        self.start_ts = start_ts
-        self.end_ts = end_ts
+    def __init__(self, start, end, text):
+        self.start = start
+        self.end = end
         self.text = text
 
 
@@ -40,10 +40,9 @@ class TestCreateModel:
         calls = []
 
         def fake_load_model(model=None, path=None, quantization=None,
-                           cpu_preprocessing=None, **kwargs):
+                           **kwargs):
             calls.append({
                 "model": model, "path": path, "quantization": quantization,
-                "cpu_preprocessing": cpu_preprocessing,
             })
             return FakeAsrAdapter()
 
@@ -59,7 +58,6 @@ class TestCreateModel:
 
         assert len(calls) == 1
         assert calls[0]["quantization"] == "int8"
-        assert calls[0]["cpu_preprocessing"] is True
         assert model is not None
 
     def test_loads_silero_vad(self, monkeypatch):

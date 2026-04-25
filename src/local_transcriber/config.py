@@ -22,11 +22,12 @@ DEVICE_DEFAULTS: dict[str, dict[str, str]] = {
     "openvino": {"model": "medium", "compute_type": "int8"},
     "openvino-gpu": {"model": "medium", "compute_type": "int8"},
     "openvino-cpu": {"model": "medium", "compute_type": "int8"},
+    "onnx": {"model": "gigaam-v3", "compute_type": "int8"},
 }
 
 # Одно место правды для допустимых ключей конфига
 _VALID_KEYS = set(HARDCODED_DEFAULTS)
-_VALID_DEVICES = {"auto", "cpu", "cuda", "openvino", "openvino-gpu", "openvino-cpu"}
+_VALID_DEVICES = {"auto", "cpu", "cuda", "openvino", "openvino-gpu", "openvino-cpu", "onnx"}
 
 
 def find_config_file() -> Path | None:
