@@ -117,8 +117,8 @@ transcribe podcast.wav --model large-v3 --device openvino-gpu
 # Максимальная скорость на CPU (русский)
 transcribe meeting.mp4 --device onnx --model gigaam-v3
 
-# Мультиязычный CPU (25 языков, медленнее)
-transcribe podcast.wav --device onnx --model parakeet-v3 --language auto
+# CPU с пунктуацией (русский, для parakeet-v3 нужен явный язык)
+transcribe podcast.wav --device onnx --model parakeet-v3 --language ru
 
 # Сохранить в конкретный файл
 transcribe interview.m4a --output result.md
@@ -229,6 +229,8 @@ language = "en"
 - **По умолчанию:** `medium` — хороший баланс скорости и качества
 - **Макс. качество (NVIDIA):** `large-v3` + `--compute-type float16`
 - **Макс. качество (Intel GPU):** `large-v3` + `--device openvino-gpu`
+- **Макс. скорость CPU (русский):** `--device onnx --model gigaam-v3` (17-29× RTF, без пунктуации)
+- **CPU с пунктуацией (русский):** `--device onnx --model parakeet-v3 --language ru` (12-20× RTF, возможны `<unk>`)
 - **Быстрый тест:** `tiny` — для проверки пайплайна
 
 <details>
@@ -241,6 +243,17 @@ language = "en"
 | `small` | ~460 MB | ~1.5 GB | ★★★ | ★★★ |
 | `medium` | ~1.5 GB | ~2.5 GB | ★★ | ★★★★ |
 | `large-v3` | ~3 GB | ~2.5 GB | ★ | ★★★★★ |
+
+#### ONNX-модели (`--device onnx`)
+
+Другие архитектуры, не Whisper. Работают через onnxruntime на CPU:
+
+| Модель | Размер (int8) | RTFx CPU | Языки | Пунктуация |
+|--------|--------------|----------|-------|-----------|
+| `gigaam-v3` | ~300 MB | 17-29× | ru | ❌ |
+| `parakeet-v3` | ~600 MB | 12-20× | 25 языков | ✅ |
+
+> **Рекомендация**: для русского — `gigaam-v3` (быстрее, чище). Для мультиязыка или пунктуации — `parakeet-v3 --language ru`. Подробнее в [ADR-005](docs/adr/005-onnx-asr-backend.md).
 
 </details>
 
