@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+from .quality import TAIL_GAP_WARN_S, find_repetition_blocks, tail_gap
 from .types import Segment, TranscribeResult
 
 _PAUSE_THRESHOLD_S = 2.0  # пауза между сегментами для разбиения на абзацы
@@ -63,7 +64,7 @@ def format_timestamp(seconds: float, use_hours: bool = False) -> str:
     return f"{minutes:02d}:{secs:02d}.{centiseconds:02d}"
 
 
-def _format_duration(seconds: float) -> str:
+def format_duration(seconds: float) -> str:
     """Человекочитаемая длительность для метаданных в шапке транскрипта."""
     total = int(seconds)
     h = total // 3600
@@ -92,7 +93,20 @@ def format_transcript(
     lines.append(f"- **Дата транскрипции**: {date.strftime('%Y-%m-%d %H:%M:%S')}")
     lines.append(f"- **Модель**: {model_name}")
     lines.append(f"- **Язык**: {result.language} ({language_mode})")
-    lines.append(f"- **Длительность**: {_format_duration(result.duration)}")
+    lines.append(f"- **Длительность**: {format_duration(result.duration)}")
+    if tail_gap(result) > TAIL_GAP_WARN_S:
+        last_end = result.segments[-1].end
+        lines.append(
+            f"- **Внимание**: транскрипт покрывает {format_duration(last_end)} "
+            f"из {format_duration(result.duration)} — возможна потеря хвоста записи"
+        )
+    for block in find_repetition_blocks(result.segments):
+        start = format_timestamp(block.start, use_hours=use_hours)
+        end = format_timestamp(block.end, use_hours=use_hours)
+        lines.append(
+            f"- **Внимание**: повторы в [{start} - {end}] ({block.count}×) "
+            "— возможны галлюцинации модели"
+        )
     lines.append(f"- **Устройство**: {device_info}")
     lines.append("")
     lines.append("---")

@@ -2,6 +2,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+from rich.console import Console
 from typer.testing import CliRunner
 
 from local_transcriber.cli import _format_device_info, app
@@ -1018,3 +1019,152 @@ def test_cli_menu_runtime_error_has_no_verbose_hint():
     assert out.exit_code == 1
     assert "нет APPDATA" in out.output
     assert "--verbose" not in out.output
+
+
+def test_cli_tail_gap_quality_warning_single(tmp_path):
+    audio = tmp_path / "tail.mp3"
+    audio.write_bytes(b"fake")
+    result = _make_result(
+        segments=[Segment(start=0.0, end=60.0, text="Фраза")],
+        duration=600.0,
+    )
+
+    patches = _single_patches(result=result, tmp_file=audio)
+    with (
+        patches[0],
+        patches[1],
+        patches[2],
+        patches[3],
+        patches[4],
+        patches[5],
+        patch("local_transcriber.cli.console", Console(stderr=True, width=1000)),
+    ):
+        out = runner.invoke(app, [str(audio)])
+
+    assert out.exit_code == 0
+    assert (
+        "Внимание: транскрипт покрывает 01:00 из 10:00 — "
+        "возможна потеря хвоста записи. Попробуйте другой --device."
+    ) in out.output
+
+
+def test_cli_repetition_quality_warning_single(tmp_path):
+    audio = tmp_path / "repeat.mp3"
+    audio.write_bytes(b"fake")
+    result = _make_result(
+        segments=[
+            Segment(start=10.0, end=11.0, text="Повторяемая фраза"),
+            Segment(start=11.0, end=12.0, text="повторяемая фраза"),
+            Segment(start=12.0, end=13.0, text="повторяемая фраза"),
+            Segment(start=13.0, end=14.0, text="повторяемая фраза"),
+        ],
+        duration=60.0,
+    )
+
+    patches = _single_patches(result=result, tmp_file=audio)
+    with (
+        patches[0],
+        patches[1],
+        patches[2],
+        patches[3],
+        patches[4],
+        patches[5],
+        patch("local_transcriber.cli.console", Console(stderr=True, width=1000)),
+    ):
+        out = runner.invoke(app, [str(audio)])
+
+    assert out.exit_code == 0
+    assert (
+        "Внимание: блоки повторов: [00:10.00 - 00:14.00] (4×) — "
+        "возможны галлюцинации модели. Попробуйте другой --device."
+    ) in out.output
+
+
+def test_cli_quality_warning_batch_includes_file_name(tmp_path):
+    a = tmp_path / "a.mp3"
+    b = tmp_path / "b.mp3"
+    a.write_bytes(b"fake")
+    b.write_bytes(b"fake")
+
+    result_warn = _make_result(
+        segments=[Segment(start=0.0, end=60.0, text="Фраза")],
+        duration=600.0,
+    )
+    result_ok = _make_result()
+    model = _make_model()
+    backend = _make_backend()
+    tfr_warn = _make_tfr(result=result_warn, model=model, backend=backend)
+    tfr_ok = _make_tfr(result=result_ok, model=model, backend=backend)
+
+    with (
+        patch("local_transcriber.cli.load_config", return_value={}),
+        patch("local_transcriber.cli.validate_input_file", side_effect=lambda p: p),
+        patch("local_transcriber.cli.detect_device", return_value="cpu"),
+        patch("local_transcriber.cli.load_model", return_value=(model, "cpu", backend, "/models/medium")),
+        patch("local_transcriber.cli._transcribe_file", side_effect=[tfr_warn, tfr_ok]),
+        patch("local_transcriber.cli.write_transcript"),
+        patch("local_transcriber.cli.console", Console(stderr=True, width=1000)),
+    ):
+        out = runner.invoke(app, [str(a), str(b)])
+
+    assert out.exit_code == 0
+    assert (
+        "  a.mp3: транскрипт покрывает 01:00 из 10:00 — "
+        "возможна потеря хвоста записи"
+    ) in out.output
+
+
+def test_cli_repetition_quality_warning_truncates_after_three_blocks(tmp_path):
+    audio = tmp_path / "repeat-many.mp3"
+    audio.write_bytes(b"fake")
+
+    def run(start, count, text):
+        return [
+            Segment(start=start + index, end=start + index + 1.0, text=text)
+            for index in range(count)
+        ]
+
+    result = _make_result(
+        segments=[
+            *run(10.0, 6, "Первый повтор"),
+            Segment(start=18.0, end=19.0, text="Разрыв один"),
+            *run(20.0, 5, "Второй повтор"),
+            Segment(start=28.0, end=29.0, text="Разрыв два"),
+            *run(30.0, 4, "Третий повтор"),
+            Segment(start=38.0, end=39.0, text="Разрыв три"),
+            *run(40.0, 4, "Четвёртый повтор"),
+        ],
+        duration=90.0,
+    )
+
+    patches = _single_patches(result=result, tmp_file=audio)
+    with (
+        patches[0],
+        patches[1],
+        patches[2],
+        patches[3],
+        patches[4],
+        patches[5],
+        patch("local_transcriber.cli.console", Console(stderr=True, width=1000)),
+    ):
+        out = runner.invoke(app, [str(audio)])
+
+    assert out.exit_code == 0
+    assert (
+        "Внимание: блоки повторов: [00:10.00 - 00:16.00] (6×); "
+        "[00:20.00 - 00:25.00] (5×); [00:30.00 - 00:34.00] (4×) "
+        "(+ ещё 1) — возможны галлюцинации модели. Попробуйте другой --device."
+    ) in out.output
+
+
+def test_cli_default_result_has_no_quality_warnings(tmp_path):
+    audio = tmp_path / "normal.mp3"
+    audio.write_bytes(b"fake")
+
+    patches = _single_patches(tmp_file=audio)
+    with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
+        out = runner.invoke(app, [str(audio)])
+
+    assert out.exit_code == 0
+    assert "потеря хвоста" not in out.output
+    assert "галлюцинации" not in out.output

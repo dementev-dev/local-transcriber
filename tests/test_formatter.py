@@ -172,3 +172,141 @@ def test_write_transcript(tmp_path):
     out = tmp_path / "output.md"
     write_transcript("# Test content\n", out)
     assert out.read_text(encoding="utf-8") == "# Test content\n"
+
+
+def test_format_transcript_tail_gap_warning():
+    result = TranscribeResult(
+        segments=[Segment(start=0.0, end=60.0, text=" Фраза.")],
+        language="ru",
+        language_probability=0.95,
+        duration=600.0,
+        device_used="cpu",
+    )
+
+    content = format_transcript(
+        result,
+        source_filename="tail.mp3",
+        model_name="medium",
+        device_info="CPU",
+        language_mode="forced",
+        transcription_date=datetime(2026, 1, 1, 0, 0, 0),
+    )
+
+    assert "возможна потеря хвоста" in content
+    assert "транскрипт покрывает 01:00 из 10:00" in content
+
+
+def test_format_transcript_no_tail_gap_warning_for_small_gap():
+    result = TranscribeResult(
+        segments=[Segment(start=0.0, end=60.0, text=" Фраза.")],
+        language="ru",
+        language_probability=0.95,
+        duration=179.99,
+        device_used="cpu",
+    )
+
+    content = format_transcript(
+        result,
+        source_filename="ok.mp3",
+        model_name="medium",
+        device_info="CPU",
+        language_mode="forced",
+        transcription_date=datetime(2026, 1, 1, 0, 0, 0),
+    )
+
+    assert "потеря хвоста" not in content
+
+
+def test_format_transcript_no_tail_gap_warning_for_exact_threshold():
+    result = TranscribeResult(
+        segments=[Segment(start=0.0, end=60.0, text=" Фраза.")],
+        language="ru",
+        language_probability=0.95,
+        duration=180.0,
+        device_used="cpu",
+    )
+
+    content = format_transcript(
+        result,
+        source_filename="ok.mp3",
+        model_name="medium",
+        device_info="CPU",
+        language_mode="forced",
+        transcription_date=datetime(2026, 1, 1, 0, 0, 0),
+    )
+
+    assert "потеря хвоста" not in content
+
+
+def test_format_transcript_repetition_warning():
+    result = TranscribeResult(
+        segments=[
+            Segment(start=10.0, end=11.0, text=" Повторяемая фраза."),
+            Segment(start=11.0, end=12.0, text=" повторяемая фраза"),
+            Segment(start=12.0, end=13.0, text=" «Повторяемая фраза»"),
+            Segment(start=13.0, end=14.0, text=" повторяемая фраза…"),
+        ],
+        language="ru",
+        language_probability=0.95,
+        duration=60.0,
+        device_used="cpu",
+    )
+
+    content = format_transcript(
+        result,
+        source_filename="repeat.mp3",
+        model_name="medium",
+        device_info="CPU",
+        language_mode="forced",
+        transcription_date=datetime(2026, 1, 1, 0, 0, 0),
+    )
+
+    assert "повторы в [00:10.00 - 00:14.00] (4×)" in content
+    assert "возможны галлюцинации" in content
+
+
+def test_format_transcript_repetition_warning_uses_hours():
+    result = TranscribeResult(
+        segments=[
+            Segment(start=3600.0, end=3601.0, text=" Повтор."),
+            Segment(start=3601.0, end=3602.0, text=" повтор"),
+            Segment(start=3602.0, end=3603.0, text=" повтор"),
+            Segment(start=3603.0, end=3604.0, text=" повтор"),
+        ],
+        language="ru",
+        language_probability=0.95,
+        duration=3700.0,
+        device_used="cpu",
+    )
+
+    content = format_transcript(
+        result,
+        source_filename="long-repeat.mp3",
+        model_name="medium",
+        device_info="CPU",
+        language_mode="forced",
+        transcription_date=datetime(2026, 1, 1, 0, 0, 0),
+    )
+
+    assert "повторы в [01:00:00.00 - 01:00:04.00] (4×)" in content
+
+
+def test_format_transcript_without_anomalies_has_no_warning_lines():
+    result = TranscribeResult(
+        segments=[Segment(start=0.0, end=60.0, text=" Обычная запись.")],
+        language="ru",
+        language_probability=0.95,
+        duration=120.0,
+        device_used="cpu",
+    )
+
+    content = format_transcript(
+        result,
+        source_filename="ok.mp3",
+        model_name="medium",
+        device_info="CPU",
+        language_mode="forced",
+        transcription_date=datetime(2026, 1, 1, 0, 0, 0),
+    )
+
+    assert "Внимание" not in content

@@ -11,9 +11,21 @@ from rich.status import Status
 from .config import apply_device_defaults, load_config, resolve_defaults
 from .context_menu import install_menu as install_context_menu
 from .context_menu import uninstall_menu as uninstall_context_menu
-from .formatter import format_transcript, write_transcript
+from .formatter import (
+    format_duration,
+    format_timestamp,
+    format_transcript,
+    write_transcript,
+)
+from .quality import (
+    TAIL_GAP_WARN_S,
+    RepetitionBlock,
+    find_repetition_blocks,
+    tail_gap,
+)
 from .transcriber import (
     Segment,
+    TranscribeResult,
     _is_cuda_error,
     _transcribe_file,
     load_model,
@@ -43,6 +55,59 @@ def _format_device_info(device_used: str) -> str:
     if device_used in ("openvino", "openvino-cpu"):
         return "OpenVINO (CPU)"
     return "CPU"
+
+
+def _format_repetition_blocks(
+    blocks: list[RepetitionBlock],
+    use_hours: bool,
+) -> str:
+    """Формирует краткое описание блоков повторов для консоли."""
+    rendered = [
+        f"[{format_timestamp(block.start, use_hours=use_hours)} - "
+        f"{format_timestamp(block.end, use_hours=use_hours)}] ({block.count}×)"
+        for block in blocks[:3]
+    ]
+    summary = "; ".join(rendered)
+    remaining = len(blocks) - 3
+    if remaining > 0:
+        summary = f"{summary} (+ ещё {remaining})"
+    return summary
+
+
+def _print_quality_warnings(result: TranscribeResult, file_name: str | None = None) -> None:
+    """Печатает предупреждения о возможной потере содержания."""
+    is_batch = file_name is not None
+    use_hours = result.duration > 3600
+
+    gap = tail_gap(result)
+    if gap > TAIL_GAP_WARN_S:
+        covered = format_duration(result.segments[-1].end)
+        total = format_duration(result.duration)
+        message = (
+            f"транскрипт покрывает {covered} из {total} — "
+            "возможна потеря хвоста записи"
+        )
+        if is_batch:
+            console.print(f"  {file_name}: {message}", style="yellow")
+        else:
+            console.print(
+                f"Внимание: {message}. Попробуйте другой --device.",
+                style="yellow",
+            )
+
+    blocks = find_repetition_blocks(result.segments)
+    if blocks:
+        message = (
+            f"блоки повторов: {_format_repetition_blocks(blocks, use_hours)} "
+            "— возможны галлюцинации модели"
+        )
+        if is_batch:
+            console.print(f"  {file_name}: {message}", style="yellow")
+        else:
+            console.print(
+                f"Внимание: {message}. Попробуйте другой --device.",
+                style="yellow",
+            )
 
 
 @app.command()
@@ -257,6 +322,7 @@ def _run_single(
     elapsed = time.monotonic() - start
     console.print(f"Транскрипт сохранён: \"{output_path}\"", style="green")
     console.print(f"  Сегментов: {len(result.segments)}  Время: {elapsed:.1f}с")
+    _print_quality_warnings(result)
 
 
 def _run_batch(
@@ -392,6 +458,7 @@ def _run_batch(
                 style="green",
             )
             processed += 1
+            _print_quality_warnings(result, file.name)
         except KeyboardInterrupt:
             raise
         except Exception as exc:
