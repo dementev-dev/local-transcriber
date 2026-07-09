@@ -9,6 +9,8 @@ from rich.console import Console
 from rich.status import Status
 
 from .config import apply_device_defaults, load_config, resolve_defaults
+from .context_menu import install_menu as install_context_menu
+from .context_menu import uninstall_menu as uninstall_context_menu
 from .formatter import format_transcript, write_transcript
 from .transcriber import (
     Segment,
@@ -45,7 +47,7 @@ def _format_device_info(device_used: str) -> str:
 
 @app.command()
 def main(
-    files: list[Path] = typer.Argument(..., help="Пути к аудио/видеофайлам"),
+    files: list[Path] | None = typer.Argument(None, help="Пути к аудио/видеофайлам"),
     model: str | None = typer.Option(
         None, "--model", "-m", show_default=False, help="Модель Whisper [по умолч.: medium]"
     ),
@@ -67,11 +69,48 @@ def main(
     ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Подробный вывод"),
     force: bool = typer.Option(False, "--force", "-f", help="Перезаписать существующие транскрипты"),
+    install_menu: bool = typer.Option(False, "--install-menu", help="Установить пункт Transcribe в SendTo"),
+    uninstall_menu: bool = typer.Option(False, "--uninstall-menu", help="Удалить пункт Transcribe из SendTo"),
 ) -> None:
     """Транскрибирует аудио/видеофайлы в markdown с таймкодами.
 
     Каскад приоритетов параметров: CLI-флаги > .transcriber.toml > device-aware дефолты.
     """
+    files = [] if files is None else files
+
+    if install_menu or uninstall_menu:
+        if install_menu and uninstall_menu:
+            console.print("--install-menu и --uninstall-menu несовместимы.", style="red bold")
+            raise SystemExit(2)
+        if files:
+            console.print("Флаги меню нельзя использовать вместе с файлами.", style="red bold")
+            raise SystemExit(2)
+        if sys.platform != "win32":
+            console.print("Пункт меню SendTo доступен только на Windows.", style="red bold")
+            raise SystemExit(1)
+
+        try:
+            if install_menu:
+                cmd_path = install_context_menu()
+                console.print(f"Пункт меню установлен: \"{cmd_path}\"", style="green")
+            else:
+                cmd_path = uninstall_context_menu()
+                if cmd_path is None:
+                    console.print("Пункт меню не был установлен.", style="yellow")
+                else:
+                    console.print(f"Пункт меню удалён: \"{cmd_path}\"", style="green")
+        except RuntimeError as exc:
+            console.print(f"Ошибка: {exc}", style="red bold")
+            raise SystemExit(1)
+        return
+
+    if not files:
+        console.print(
+            "Укажите хотя бы один файл или используйте --install-menu/--uninstall-menu.",
+            style="red bold",
+        )
+        raise SystemExit(2)
+
     try:
         config = load_config()
         cli_values = {"model": model, "language": language, "device": device, "compute_type": compute_type}

@@ -921,3 +921,100 @@ def test_cli_threads_negative_rejected(tmp_path):
     audio.write_bytes(b"fake")
     out = runner.invoke(app, [str(audio), "--threads", "-1"])
     assert out.exit_code != 0
+
+
+# === SendTo context menu flags ===
+
+
+def test_cli_install_menu_success(tmp_path):
+    cmd_path = tmp_path / "Transcribe.cmd"
+
+    with (
+        patch("local_transcriber.cli.install_context_menu", return_value=cmd_path) as mock_install,
+        patch("local_transcriber.cli.load_config") as mock_load_config,
+        patch("local_transcriber.cli.sys") as mock_sys,
+    ):
+        mock_sys.platform = "win32"
+        out = runner.invoke(app, ["--install-menu"])
+
+    assert out.exit_code == 0
+    assert "Пункт меню установлен" in out.output
+    assert cmd_path.name in out.output
+    mock_install.assert_called_once_with()
+    mock_load_config.assert_not_called()
+
+
+def test_cli_uninstall_menu_success(tmp_path):
+    cmd_path = tmp_path / "Transcribe.cmd"
+
+    with (
+        patch("local_transcriber.cli.uninstall_context_menu", return_value=cmd_path) as mock_uninstall,
+        patch("local_transcriber.cli.load_config") as mock_load_config,
+        patch("local_transcriber.cli.sys") as mock_sys,
+    ):
+        mock_sys.platform = "win32"
+        out = runner.invoke(app, ["--uninstall-menu"])
+
+    assert out.exit_code == 0
+    assert "Пункт меню удалён" in out.output
+    assert cmd_path.name in out.output
+    mock_uninstall.assert_called_once_with()
+    mock_load_config.assert_not_called()
+
+
+def test_cli_uninstall_menu_missing_is_success():
+    with (
+        patch("local_transcriber.cli.uninstall_context_menu", return_value=None),
+        patch("local_transcriber.cli.sys") as mock_sys,
+    ):
+        mock_sys.platform = "win32"
+        out = runner.invoke(app, ["--uninstall-menu"])
+
+    assert out.exit_code == 0
+    assert "не был установлен" in out.output
+
+
+def test_cli_menu_flags_are_mutually_exclusive():
+    out = runner.invoke(app, ["--install-menu", "--uninstall-menu"])
+
+    assert out.exit_code == 2
+    assert "несовместимы" in out.output
+
+
+def test_cli_menu_flag_with_file_is_rejected(tmp_path):
+    audio = tmp_path / "test.mp3"
+    audio.write_bytes(b"fake")
+
+    out = runner.invoke(app, [str(audio), "--install-menu"])
+
+    assert out.exit_code == 2
+    assert "нельзя использовать вместе с файлами" in out.output
+
+
+def test_cli_no_files_and_no_menu_flags_is_rejected():
+    out = runner.invoke(app, [])
+
+    assert out.exit_code == 2
+    assert "Укажите хотя бы один файл" in out.output
+
+
+def test_cli_menu_flags_available_only_on_windows():
+    with patch("local_transcriber.cli.sys") as mock_sys:
+        mock_sys.platform = "linux"
+        out = runner.invoke(app, ["--install-menu"])
+
+    assert out.exit_code == 1
+    assert "только на Windows" in out.output
+
+
+def test_cli_menu_runtime_error_has_no_verbose_hint():
+    with (
+        patch("local_transcriber.cli.install_context_menu", side_effect=RuntimeError("нет APPDATA")),
+        patch("local_transcriber.cli.sys") as mock_sys,
+    ):
+        mock_sys.platform = "win32"
+        out = runner.invoke(app, ["--install-menu"])
+
+    assert out.exit_code == 1
+    assert "нет APPDATA" in out.output
+    assert "--verbose" not in out.output
