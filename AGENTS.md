@@ -27,6 +27,7 @@ Package manager is **uv** (not pip). Build backend is hatchling.
 CLI (cli.py)
   → config.py      cascade: CLI arg → .transcriber.toml → device-aware default → hardcoded
   → utils.py       detect_device(), validate files, expand globs (Windows workaround)
+  → context_menu.py Windows SendTo: Transcribe.cmd install/uninstall (--install-menu / --uninstall-menu)
   → transcriber.py load_model() → get_backend(device) → ensure_model_available → create_model
                     _transcribe_file() with mid-stream CUDA→CPU fallback
   → formatter.py   segments → markdown with timestamps, paragraph grouping (>2s pause or >60s)
