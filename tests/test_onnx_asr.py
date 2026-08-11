@@ -328,6 +328,27 @@ class TestTranscribe:
         assert result.language == "unknown"
         assert result.duration == 1.0
 
+    def test_transcribe_skips_zero_length_vad_segments(self, monkeypatch, tmp_path):
+        wav_file = tmp_path / "test.wav"
+        wav_file.write_bytes(b"fake audio")
+
+        def fake_decode_audio(path, sampling_rate=16000):
+            import numpy as np
+
+            return np.array([0.0] * 16000, dtype=np.float32)
+
+        class FakeModel:
+            def recognize(self, waveform, sample_rate, language=None):
+                yield FakeVadSegment(0.5, 0.5, "нулевой")
+                yield FakeVadSegment(0.75, 0.5, "обратный")
+                yield FakeVadSegment(0.5, 1.0, "валидный")
+
+        monkeypatch.setattr("faster_whisper.decode_audio", fake_decode_audio)
+
+        result = OnnxAsrBackend().transcribe(FakeModel(), wav_file, language=None)
+
+        assert result.segments == [Segment(start=0.5, end=1.0, text="валидный")]
+
 
 class TestBackendRegistration:
     def test_get_backend_returns_onnx_backend(self):

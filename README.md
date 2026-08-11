@@ -280,10 +280,13 @@ language = "en"
 | Модель | Размер (int8) | RTFx CPU | Языки | Пунктуация |
 |--------|--------------|----------|-------|-----------|
 | `gigaam-v3` | ~300 MB | 17-29× | ru | ❌ |
-| `gigaam-multilingual-ctc` | ~300 MB | не измерено | ru, en, kk, ky, uz | ❌ |
-| `gigaam-v3-e2e-ctc` | ~300 MB | не измерено | ru | ✅ |
-| `gigaam-v3-e2e-rnnt` | ~300 MB | не измерено | ru | ✅ |
+| `gigaam-multilingual-ctc` | ~300 MB | 10,5×* | ru, en, kk, ky, uz | ❌ |
+| `gigaam-v3-e2e-ctc` | ~300 MB | 12,3×* | ru | ✅ |
+| `gigaam-v3-e2e-rnnt` | ~300 MB | 11,7×* | ru | ✅ |
 | `parakeet-v3` | ~600 MB | 12-20× | 25 языков | ✅ |
+
+\* Наблюдение на AMD Ryzen 7 8845H, Windows, `int8`, запись 14:51. Это не
+приёмочный замер для целевого Intel Core i5.
 
 > **Рекомендация**: для русского по-прежнему используйте проверенный `gigaam-v3`
 > (см. [ADR-006](docs/adr/006-onnx-asr-backend.md)). E2E-модели добавляют

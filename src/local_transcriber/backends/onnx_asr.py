@@ -169,9 +169,13 @@ class OnnxAsrBackend:
         for vad_seg in model.recognize(
             audio_array, sample_rate=16000, language=language
         ):
+            start = max(0.0, vad_seg.start)
+            end = max(0.0, vad_seg.end)
+            if end <= start:
+                continue
             seg = Segment(
-                start=max(0.0, vad_seg.start),
-                end=max(0.0, vad_seg.end),
+                start=start,
+                end=end,
                 text=vad_seg.text,
             )
             if on_segment is not None:
