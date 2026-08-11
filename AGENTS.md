@@ -75,3 +75,16 @@ All tests mock backends — no real model downloads or transcription. Key test p
 - `docs/gpu.md` — GPU benchmarks, platform compatibility details
 - `docs/adr/` — architecture decision records (CUDA bootstrap, batch mode, pluggable backends, compute-type defaults, ONNX-ASR evaluation)
 
+## Agent skills
+
+### Issue tracker
+
+Задачи ведутся в Gitea через `tea`; GitHub используется только как зеркало, внешние PR не входят в triage. См. `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Используются стандартные пять triage-меток. См. `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Репозиторий использует single-context layout. См. `docs/agents/domain.md`.
