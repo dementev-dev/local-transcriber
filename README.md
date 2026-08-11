@@ -118,8 +118,11 @@ transcribe podcast.wav --model large-v3 --device openvino-gpu
 # Максимальная скорость на CPU (русский)
 transcribe meeting.mp4 --device onnx --model gigaam-v3
 
-# CPU с пунктуацией (русский, для parakeet-v3 нужен явный язык)
-transcribe podcast.wav --device onnx --model parakeet-v3 --language ru
+# CPU с пунктуацией и нормализацией русского текста
+transcribe podcast.wav --device onnx --model gigaam-v3-e2e-ctc
+
+# Смешанная русско-английская речь
+transcribe meeting.wav --device onnx --model gigaam-multilingual-ctc
 
 # Сохранить в конкретный файл
 transcribe interview.m4a --output result.md
@@ -277,9 +280,26 @@ language = "en"
 | Модель | Размер (int8) | RTFx CPU | Языки | Пунктуация |
 |--------|--------------|----------|-------|-----------|
 | `gigaam-v3` | ~300 MB | 17-29× | ru | ❌ |
+| `gigaam-multilingual-ctc` | ~300 MB | не измерено | ru, en, kk, ky, uz | ❌ |
+| `gigaam-v3-e2e-ctc` | ~300 MB | не измерено | ru | ✅ |
+| `gigaam-v3-e2e-rnnt` | ~300 MB | не измерено | ru | ✅ |
 | `parakeet-v3` | ~600 MB | 12-20× | 25 языков | ✅ |
 
-> **Рекомендация**: для русского — `gigaam-v3` (единственный из onnx-моделей, дающий пригодный для конспекта транскрипт на русских встречах; см. [ADR-006](docs/adr/006-onnx-asr-backend.md)). `parakeet-v3` уместен только для англоязычного / multilingual контента — на русском воспроизводит проблемы из [ADR-005](docs/adr/005-parakeet-evaluation.md) (Mm-hmm-редукция тихих реплик, иноязычные вставки).
+> **Рекомендация**: для русского по-прежнему используйте проверенный `gigaam-v3`
+> (см. [ADR-006](docs/adr/006-onnx-asr-backend.md)). E2E-модели добавляют
+> пунктуацию и нормализацию, но их скорость на слабых CPU не измерялась;
+> `gigaam-v3-e2e-rnnt` декодирует последовательно и особенно медленна на длинных
+> записях. `parakeet-v3` на русском воспроизводит проблемы из
+> [ADR-005](docs/adr/005-parakeet-evaluation.md).
+
+GigaAM Multilingual сама распознаёт русский, английский, казахский, кыргызский и
+узбекский внутри одной записи. `onnx-asr` не передаёт этой модели подсказку
+языка, поэтому `--language` не управляет её выбором языка.
+
+Для моделей из таблицы опубликованы `int8` и `float32`. Если неявный
+device-aware дефолт недоступен для выбранной модели, CLI сообщит о подстановке
+доступного варианта. Явное значение из `--compute-type` или
+`.transcriber.toml` вместо подстановки завершится ошибкой.
 
 </details>
 
@@ -291,9 +311,9 @@ language = "en"
 | `float16` | CUDA | ~4.5-5 GB | Отлично | **По умолчанию для CUDA** |
 | `int8_float16` | CUDA | ~4.7 GB | Отлично | GPU от 6 GB, альтернатива float16 |
 | `int8_float32` | CPU | Среднее | Отлично | **Рекомендуется для CPU** — 1.5x быстрее float32 при том же качестве |
-| `int8` | CUDA / OpenVINO | Низкое | Хорошо, но бывают галлюцинации | **По умолчанию для OpenVINO** |
+| `int8` | CUDA / OpenVINO / ONNX | Низкое | Хорошо, но бывают галлюцинации | **По умолчанию для OpenVINO и ONNX** |
 | `fp16` | OpenVINO | Низкое | Отлично | OpenVINO large-v3 (выбирается автоматически) |
-| `float32` | CPU | Среднее | Отлично | **По умолчанию для CPU** |
+| `float32` | CPU / ONNX | Среднее | Отлично | **По умолчанию для CPU** |
 
 **Важно:** `int8` на длинных записях может давать галлюцинации (повтор фраз, потеря контента).
 `float16`/`fp16` и `float32` значительно стабильнее на записях >20 минут.

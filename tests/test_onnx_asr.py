@@ -1,9 +1,8 @@
 """Tests for onnx-asr backend."""
 
 import pytest
-from pathlib import Path
 
-from local_transcriber.backends.onnx_asr import OnnxAsrBackend, MODEL_ALIASES
+from local_transcriber.backends.onnx_asr import OnnxAsrBackend
 from local_transcriber.types import Segment, TranscribeResult
 
 
@@ -24,7 +23,7 @@ class TestEnsureModelAvailable:
 
     def test_returns_model_id_for_parakeet(self):
         backend = OnnxAsrBackend()
-        result = backend.ensure_model_available("parakeet-v3", "fp16")
+        result = backend.ensure_model_available("parakeet-v3", "int8")
         assert result == "nemo-parakeet-tdt-0.6b-v3"
 
     def test_stores_compute_type(self):
@@ -32,6 +31,51 @@ class TestEnsureModelAvailable:
         backend.ensure_model_available("gigaam-v3", "float32")
         assert backend._resolved_model_id == "gigaam-v3-ctc"
         assert backend.actual_compute_type == "float32"
+
+    @pytest.mark.parametrize(
+        "model_name",
+        [
+            "gigaam-multilingual-ctc",
+            "gigaam-v3-e2e-ctc",
+            "gigaam-v3-e2e-rnnt",
+        ],
+    )
+    def test_explicit_unavailable_compute_type_is_rejected(self, model_name):
+        backend = OnnxAsrBackend(compute_type_explicit=True)
+
+        with pytest.raises(ValueError, match="недоступна с compute_type='fp16'"):
+            backend.ensure_model_available(model_name, "fp16")
+
+    def test_implicit_unavailable_compute_type_falls_back_and_reports(
+        self, monkeypatch
+    ):
+        quantizations = []
+        statuses = []
+
+        class FakeAsrAdapter:
+            def with_vad(self, vad):
+                return self
+
+        def fake_load_model(*, model, quantization):
+            quantizations.append(quantization)
+            return FakeAsrAdapter()
+
+        monkeypatch.setattr("onnx_asr.load_model", fake_load_model)
+        monkeypatch.setattr("onnx_asr.load_vad", lambda model: None)
+
+        backend = OnnxAsrBackend(compute_type_explicit=False)
+        model_id = backend.ensure_model_available(
+            "gigaam-v3-e2e-ctc",
+            "fp16",
+            on_status=statuses.append,
+        )
+        backend.create_model(model_id, "onnx", "fp16")
+
+        assert backend.actual_compute_type == "int8"
+        assert quantizations == ["int8"]
+        assert statuses == [
+            "Модель gigaam-v3-e2e-ctc недоступна с compute_type=fp16; использую int8."
+        ]
 
 
 class TestCreateModel:
@@ -80,7 +124,7 @@ class TestCreateModel:
         monkeypatch.setattr("onnx_asr.load_vad", fake_load_vad)
 
         backend = OnnxAsrBackend()
-        model = backend.create_model("gigaam-v3-ctc", "onnx", "int8")
+        backend.create_model("gigaam-v3-ctc", "onnx", "int8")
 
         assert vad_calls == ["silero"]
 
@@ -228,7 +272,7 @@ class TestTranscribe:
         monkeypatch.setattr("faster_whisper.decode_audio", fake_decode_audio)
 
         backend = OnnxAsrBackend()
-        result = backend.transcribe(
+        backend.transcribe(
             FakeModel(), wav_file, language=None,
             on_segment=lambda s: segments_captured.append(s),
         )
@@ -290,6 +334,14 @@ class TestBackendRegistration:
         from local_transcriber.backends import get_backend
         backend = get_backend("onnx")
         assert isinstance(backend, OnnxAsrBackend)
+
+    def test_get_backend_preserves_implicit_compute_type(self):
+        from local_transcriber.backends import get_backend
+
+        backend = get_backend("onnx", compute_type_explicit=False)
+        backend.ensure_model_available("gigaam-v3-e2e-rnnt", "fp16")
+
+        assert backend.actual_compute_type == "int8"
 
 
 class TestModelAliases:
