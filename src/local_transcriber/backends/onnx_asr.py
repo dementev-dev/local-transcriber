@@ -30,6 +30,10 @@ MODEL_CATALOG: dict[str, OnnxModelSpec] = {
         "gigaam-multilingual-ctc",
         _INT8_AND_FLOAT32,
     ),
+    "gigaam-multilingual-large-ctc": OnnxModelSpec(
+        "gigaam-multilingual-large-ctc",
+        _INT8_AND_FLOAT32,
+    ),
     "gigaam-v3-e2e-ctc": OnnxModelSpec(
         "gigaam-v3-e2e-ctc",
         _INT8_AND_FLOAT32,

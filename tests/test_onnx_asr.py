@@ -36,6 +36,7 @@ class TestEnsureModelAvailable:
         "model_name",
         [
             "gigaam-multilingual-ctc",
+            "gigaam-multilingual-large-ctc",
             "gigaam-v3-e2e-ctc",
             "gigaam-v3-e2e-rnnt",
         ],

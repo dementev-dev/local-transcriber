@@ -124,6 +124,9 @@ transcribe podcast.wav --device onnx --model gigaam-v3-e2e-ctc
 # Смешанная русско-английская речь
 transcribe meeting.wav --device onnx --model gigaam-multilingual-ctc
 
+# Повышенная точность смешанной речи (медленнее, ~590 MB)
+transcribe meeting.wav --device onnx --model gigaam-multilingual-large-ctc
+
 # Сохранить в конкретный файл
 transcribe interview.m4a --output result.md
 ```
@@ -280,24 +283,28 @@ language = "en"
 | Модель | Размер (int8) | RTFx CPU | Языки | Пунктуация |
 |--------|--------------|----------|-------|-----------|
 | `gigaam-v3` | ~300 MB | 17-29× | ru | ❌ |
-| `gigaam-multilingual-ctc` | ~300 MB | 10,5×* | ru, en, kk, ky, uz | ❌ |
-| `gigaam-v3-e2e-ctc` | ~300 MB | 12,3×* | ru | ✅ |
-| `gigaam-v3-e2e-rnnt` | ~300 MB | 11,7×* | ru | ✅ |
+| `gigaam-multilingual-ctc` | ~300 MB | 10,0×* | ru, en, kk, ky, uz | ❌ |
+| `gigaam-multilingual-large-ctc` | ~590 MB | 4,8×* | ru, en, kk, ky, uz | ❌ |
+| `gigaam-v3-e2e-ctc` | ~300 MB | 11,9×* | ru | ✅ |
+| `gigaam-v3-e2e-rnnt` | ~300 MB | 11,5×* | ru | ✅ |
 | `parakeet-v3` | ~600 MB | 12-20× | 25 языков | ✅ |
 
-\* Наблюдение на AMD Ryzen 7 8845H, Windows, `int8`, запись 14:51. Это не
-приёмочный замер для целевого Intel Core i5. Методика и качественное сравнение:
+\* Наблюдение на AMD Ryzen 7 8845H, Windows, `int8`, три записи общей
+длительностью 43:37. Это не приёмочный замер для целевого Intel Core i5.
+Методика и качественное сравнение:
 [benchmark GigaAM и Whisper](docs/benchmarks/2026-08-11-gigaam-model-comparison.md).
 
 > **Рекомендация**: для готового читаемого русского текста
 > используйте `gigaam-v3-e2e-rnnt`, для последующей машинной обработки — более
-> точный по словам `gigaam-v3` без пунктуации. Вывод проверен на трёх реальных
-> записях общей длительностью 43:37. `parakeet-v3` на русском воспроизводит
-> проблемы из [ADR-005](docs/adr/005-parakeet-evaluation.md).
+> точный по словам `gigaam-v3` без пунктуации. Для смешанной речи с приоритетом
+> качества используйте `gigaam-multilingual-large-ctc`: она примерно вдвое
+> медленнее small-варианта, но приблизилась к monolingual GigaAM по WER.
+> `parakeet-v3` на русском воспроизводит проблемы из
+> [ADR-005](docs/adr/005-parakeet-evaluation.md).
 
-GigaAM Multilingual сама распознаёт русский, английский, казахский, кыргызский и
-узбекский внутри одной записи. `onnx-asr` не передаёт этой модели подсказку
-языка, поэтому `--language` не управляет её выбором языка.
+Обе GigaAM Multilingual сами распознают русский, английский, казахский,
+кыргызский и узбекский внутри одной записи. `onnx-asr` не передаёт этим моделям
+подсказку языка, поэтому `--language` не управляет выбором языка.
 
 Для моделей из таблицы опубликованы `int8` и `float32`. Если неявный
 device-aware дефолт недоступен для выбранной модели, CLI сообщит о подстановке
