@@ -287,7 +287,7 @@ language = "en"
 | `gigaam-multilingual-large-ctc` | ~590 MB | 4,8×* | ru, en, kk, ky, uz | ❌ |
 | `gigaam-v3-e2e-ctc` | ~300 MB | 11,9×* | ru | ✅ |
 | `gigaam-v3-e2e-rnnt` | ~300 MB | 11,5×* | ru | ✅ |
-| `parakeet-v3` | ~600 MB | 12-20× | 25 языков | ✅ |
+| `parakeet-v3` | ~600 MB | 7,6×* | 25 языков | ✅ |
 
 \* Наблюдение на AMD Ryzen 7 8845H, Windows, `int8`, три записи общей
 длительностью 43:37. Это не приёмочный замер для целевого Intel Core i5.
@@ -299,8 +299,9 @@ language = "en"
 > точный по словам `gigaam-v3` без пунктуации. Для смешанной речи с приоритетом
 > качества используйте `gigaam-multilingual-large-ctc`: она примерно вдвое
 > медленнее small-варианта, но приблизилась к monolingual GigaAM по WER.
-> `parakeet-v3` на русском воспроизводит проблемы из
-> [ADR-005](docs/adr/005-parakeet-evaluation.md).
+> `parakeet-v3` в 1,58 раза быстрее Large и ставит пунктуацию, но на тех же
+> трёх записях хуже по WER и вставляет ложные английские фразы в русскую речь;
+> это подтверждает проблемы из [ADR-005](docs/adr/005-parakeet-evaluation.md).
 
 Обе GigaAM Multilingual сами распознают русский, английский, казахский,
 кыргызский и узбекский внутри одной записи. `onnx-asr` не передаёт этим моделям
