@@ -118,8 +118,14 @@ transcribe podcast.wav --model large-v3 --device openvino-gpu
 # Максимальная скорость на CPU (русский)
 transcribe meeting.mp4 --device onnx --model gigaam-v3
 
-# CPU с пунктуацией (русский, для parakeet-v3 нужен явный язык)
-transcribe podcast.wav --device onnx --model parakeet-v3 --language ru
+# CPU с пунктуацией и нормализацией русского текста
+transcribe podcast.wav --device onnx --model gigaam-v3-e2e-ctc
+
+# Смешанная русско-английская речь
+transcribe meeting.wav --device onnx --model gigaam-multilingual-ctc
+
+# Повышенная точность смешанной речи (медленнее, ~590 MB)
+transcribe meeting.wav --device onnx --model gigaam-multilingual-large-ctc
 
 # Сохранить в конкретный файл
 transcribe interview.m4a --output result.md
@@ -245,14 +251,15 @@ language = "en"
 
 | Параметр | CUDA | OpenVINO (GPU) | OpenVINO (CPU) | ONNX | CPU |
 |----------|------|----------------|----------------|------|-----|
-| model | medium | medium | medium | gigaam-v3 | medium |
+| model | medium | medium | medium | gigaam-v3-e2e-rnnt | medium |
 | compute_type | float16 | int8 | int8 | int8 | float32 |
 | language | ru | ru | ru | ru | ru |
 
 ## Модели и GPU
 
 Рекомендации:
-- **По умолчанию:** `medium` — хороший баланс скорости и качества
+- **По умолчанию для ONNX:** `gigaam-v3-e2e-rnnt` — читаемый русский текст с
+  пунктуацией почти без потери скорости относительно сырого `gigaam-v3`
 - **Макс. качество (NVIDIA):** `large-v3` + `--compute-type float16`
 - **Макс. качество (Intel GPU):** `large-v3` + `--device openvino-gpu`
 - **Макс. скорость CPU (русский):** `--device onnx --model gigaam-v3` (17-29× RTF, без пунктуации; рекомендуется LLM-нормализация терминов после)
@@ -277,9 +284,34 @@ language = "en"
 | Модель | Размер (int8) | RTFx CPU | Языки | Пунктуация |
 |--------|--------------|----------|-------|-----------|
 | `gigaam-v3` | ~300 MB | 17-29× | ru | ❌ |
-| `parakeet-v3` | ~600 MB | 12-20× | 25 языков | ✅ |
+| `gigaam-multilingual-ctc` | ~300 MB | 10,0×* | ru, en, kk, ky, uz | ❌ |
+| `gigaam-multilingual-large-ctc` | ~590 MB | 4,8×* | ru, en, kk, ky, uz | ❌ |
+| `gigaam-v3-e2e-ctc` | ~300 MB | 11,9×* | ru | ✅ |
+| `gigaam-v3-e2e-rnnt` | ~300 MB | 11,5×* | ru | ✅ |
+| `parakeet-v3` | ~600 MB | 7,6×* | 25 языков | ✅ |
 
-> **Рекомендация**: для русского — `gigaam-v3` (единственный из onnx-моделей, дающий пригодный для конспекта транскрипт на русских встречах; см. [ADR-006](docs/adr/006-onnx-asr-backend.md)). `parakeet-v3` уместен только для англоязычного / multilingual контента — на русском воспроизводит проблемы из [ADR-005](docs/adr/005-parakeet-evaluation.md) (Mm-hmm-редукция тихих реплик, иноязычные вставки).
+\* Наблюдение на AMD Ryzen 7 8845H, Windows, `int8`, три записи общей
+длительностью 43:37. Это не приёмочный замер для целевого Intel Core i5.
+Методика и качественное сравнение:
+[benchmark GigaAM и Whisper](docs/benchmarks/2026-08-11-gigaam-model-comparison.md).
+
+> **Рекомендация**: ONNX по умолчанию использует `gigaam-v3-e2e-rnnt` для
+> готового читаемого русского текста. Для последующей машинной обработки можно
+> явно выбрать более точный по словам `gigaam-v3` без пунктуации. Для смешанной
+> речи с приоритетом качества используйте `gigaam-multilingual-large-ctc`: она примерно вдвое
+> медленнее small-варианта, но приблизилась к monolingual GigaAM по WER.
+> `parakeet-v3` в 1,58 раза быстрее Large и ставит пунктуацию, но на тех же
+> трёх записях хуже по WER и вставляет ложные английские фразы в русскую речь;
+> это подтверждает проблемы из [ADR-005](docs/adr/005-parakeet-evaluation.md).
+
+Обе GigaAM Multilingual сами распознают русский, английский, казахский,
+кыргызский и узбекский внутри одной записи. `onnx-asr` не передаёт этим моделям
+подсказку языка, поэтому `--language` не управляет выбором языка.
+
+Для моделей из таблицы опубликованы `int8` и `float32`. Если неявный
+device-aware дефолт недоступен для выбранной модели, CLI сообщит о подстановке
+доступного варианта. Явное значение из `--compute-type` или
+`.transcriber.toml` вместо подстановки завершится ошибкой.
 
 </details>
 
@@ -291,9 +323,9 @@ language = "en"
 | `float16` | CUDA | ~4.5-5 GB | Отлично | **По умолчанию для CUDA** |
 | `int8_float16` | CUDA | ~4.7 GB | Отлично | GPU от 6 GB, альтернатива float16 |
 | `int8_float32` | CPU | Среднее | Отлично | **Рекомендуется для CPU** — 1.5x быстрее float32 при том же качестве |
-| `int8` | CUDA / OpenVINO | Низкое | Хорошо, но бывают галлюцинации | **По умолчанию для OpenVINO** |
+| `int8` | CUDA / OpenVINO / ONNX | Низкое | Хорошо, но бывают галлюцинации | **По умолчанию для OpenVINO и ONNX** |
 | `fp16` | OpenVINO | Низкое | Отлично | OpenVINO large-v3 (выбирается автоматически) |
-| `float32` | CPU | Среднее | Отлично | **По умолчанию для CPU** |
+| `float32` | CPU / ONNX | Среднее | Отлично | **По умолчанию для CPU** |
 
 **Важно:** `int8` на длинных записях может давать галлюцинации (повтор фраз, потеря контента).
 `float16`/`fp16` и `float32` значительно стабильнее на записях >20 минут.

@@ -32,7 +32,7 @@ def get_backend(device: str, *, compute_type_explicit: bool = True) -> Backend:
             raise ValueError(
                 "onnx-asr бэкенд недоступен. Установите: pip install onnx-asr[cpu,hub]"
             ) from None
-        return OnnxAsrBackend()
+        return OnnxAsrBackend(compute_type_explicit=compute_type_explicit)
 
     # cuda, cpu и всё остальное → faster-whisper
     from .faster_whisper import FasterWhisperBackend

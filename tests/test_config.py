@@ -113,6 +113,21 @@ def test_apply_device_defaults_cpu():
     assert result["compute_type"] == "float32"
 
 
+def test_apply_device_defaults_onnx_uses_readable_model():
+    defaults = {
+        "model": "medium",
+        "language": "ru",
+        "device": "auto",
+        "compute_type": "float32",
+    }
+    cli = {"model": None, "language": None, "device": None, "compute_type": None}
+
+    result = apply_device_defaults(defaults, "onnx", cli, {})
+
+    assert result["model"] == "gigaam-v3-e2e-rnnt"
+    assert result["compute_type"] == "int8"
+
+
 def test_apply_device_defaults_cli_overrides():
     defaults = {"model": "large-v3", "language": "ru", "device": "auto", "compute_type": "int8"}
     cli = {"model": "large-v3", "language": None, "device": None, "compute_type": "int8"}

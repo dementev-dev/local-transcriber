@@ -1,13 +1,8 @@
 """Загрузка конфигурации из ``.transcriber.toml`` и каскад приоритетов."""
 
-import sys
+import tomllib
 import warnings
 from pathlib import Path
-
-if sys.version_info >= (3, 11):
-    import tomllib
-else:
-    import tomli as tomllib
 
 HARDCODED_DEFAULTS: dict[str, str] = {
     "model": "medium",
@@ -22,12 +17,20 @@ DEVICE_DEFAULTS: dict[str, dict[str, str]] = {
     "openvino": {"model": "medium", "compute_type": "int8"},
     "openvino-gpu": {"model": "medium", "compute_type": "int8"},
     "openvino-cpu": {"model": "medium", "compute_type": "int8"},
-    "onnx": {"model": "gigaam-v3", "compute_type": "int8"},
+    "onnx": {"model": "gigaam-v3-e2e-rnnt", "compute_type": "int8"},
 }
 
 # Одно место правды для допустимых ключей конфига
 _VALID_KEYS = set(HARDCODED_DEFAULTS)
-_VALID_DEVICES = {"auto", "cpu", "cuda", "openvino", "openvino-gpu", "openvino-cpu", "onnx"}
+_VALID_DEVICES = {
+    "auto",
+    "cpu",
+    "cuda",
+    "openvino",
+    "openvino-gpu",
+    "openvino-cpu",
+    "onnx",
+}
 
 
 def find_config_file() -> Path | None:
