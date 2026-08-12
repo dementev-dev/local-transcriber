@@ -80,7 +80,7 @@ def format_transcript(
     source_filename: str,
     model_name: str,
     device_info: str,
-    language_mode: str,  # "detected" | "forced"
+    language_mode: str,  # detected | forced | из профиля модели | не определён
     transcription_date: datetime | None = None,  # None -> datetime.now()
 ) -> str:
     """Собирает markdown-транскрипт: шапка с метаданными + абзацы с таймкодами."""

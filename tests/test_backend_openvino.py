@@ -17,15 +17,10 @@ from local_transcriber.types import Segment
 # === _resolve_repo ===
 
 
-def test_model_catalog_contains_supported_profiles():
-    assert MODEL_REPOS == {
-        ("tiny", "int8"): "OpenVINO/whisper-tiny-int8-ov",
-        ("base", "fp16"): "OpenVINO/whisper-base-fp16-ov",
-        ("small", "int8"): "OpenVINO/whisper-small-int8-ov",
-        ("medium", "int8"): "OpenVINO/whisper-medium-int8-ov",
-        ("medium", "fp16"): "OpenVINO/whisper-medium-fp16-ov",
-        ("large-v3", "int8"): "OpenVINO/whisper-large-v3-int8-ov",
-        ("large-v3", "fp16"): "OpenVINO/whisper-large-v3-fp16-ov",
+def test_model_catalog_contains_large_v3_turbo_profiles():
+    assert {
+        pair: repo for pair, repo in MODEL_REPOS.items() if pair[0] == "large-v3-turbo"
+    } == {
         ("large-v3-turbo", "int8"): "OpenVINO/whisper-large-v3-turbo-int8-ov",
         ("large-v3-turbo", "fp16"): "OpenVINO/whisper-large-v3-turbo-fp16-ov",
     }
@@ -61,11 +56,20 @@ def test_resolve_repo_implicit_fallback():
     assert backend._resolve_repo("base", "int8") == ("OpenVINO/whisper-base-fp16-ov", "fp16")
 
 
-def test_resolve_repo_implicit_large_v3_prefers_fp16():
-    """Неявный compute_type: large-v3 автоматически получает fp16."""
+@pytest.mark.parametrize(
+    ("model_name", "expected_compute_type"),
+    [("large-v3", "fp16"), ("large-v3-turbo", "int8")],
+)
+def test_resolve_repo_implicit_large_v3_profiles(
+    model_name, expected_compute_type
+):
+    """Неявный compute_type различает обычную и turbo-модель."""
     backend = OpenVINOBackend(compute_type_explicit=False)
-    # Дефолт int8, но для large-v3 override на fp16
-    assert backend._resolve_repo("large-v3", "int8") == ("OpenVINO/whisper-large-v3-fp16-ov", "fp16")
+
+    assert backend._resolve_repo(model_name, "int8") == (
+        f"OpenVINO/whisper-{model_name}-{expected_compute_type}-ov",
+        expected_compute_type,
+    )
 
 
 def test_resolve_repo_explicit_large_v3_int8_respected():

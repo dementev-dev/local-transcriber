@@ -5,7 +5,7 @@ import pytest
 from rich.console import Console
 from typer.testing import CliRunner
 
-from local_transcriber.cli import _format_device_info, app
+from local_transcriber.cli import _format_device_info, _format_language_mode, app
 from local_transcriber.transcriber import Segment, TranscribeFileResult, TranscribeResult
 
 runner = CliRunner()
@@ -40,6 +40,24 @@ def _make_tfr(result=None, model=None, actual_device="cpu", backend=None, model_
         result=result, model=model, actual_device=actual_device,
         backend=backend, model_path=model_path,
     )
+
+
+@pytest.mark.parametrize(
+    ("requested_language", "language", "probability", "expected"),
+    [
+        ("ru", "ru", 1.0, "forced"),
+        ("auto", "ru", 0.95, "detected"),
+        ("auto", "ru", 0.0, "из профиля модели"),
+        ("auto", "unknown", 0.0, "не определён"),
+    ],
+)
+def test_format_language_mode(
+    requested_language, language, probability, expected
+):
+    result = _make_result(language=language)
+    result.language_probability = probability
+
+    assert _format_language_mode(requested_language, result) == expected
 
 
 def _single_patches(result=None, tmp_file=None, actual_device="cpu"):

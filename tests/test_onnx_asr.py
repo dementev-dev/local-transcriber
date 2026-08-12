@@ -1,5 +1,7 @@
 """Tests for onnx-asr backend."""
 
+import warnings
+
 import pytest
 
 from local_transcriber.backends.onnx_asr import OnnxAsrBackend
@@ -224,6 +226,68 @@ class TestCreateModel:
 
 
 class TestTranscribe:
+    @pytest.mark.parametrize(
+        ("model_name", "language", "expects_warning"),
+        [
+            ("gigaam-v3-e2e-rnnt", "en", True),
+            ("gigaam-v3-e2e-rnnt", "ru", False),
+            ("gigaam-multilingual-ctc", "en", False),
+        ],
+    )
+    def test_warns_when_language_is_not_supported(
+        self, monkeypatch, tmp_path, model_name, language, expects_warning
+    ):
+        wav_file = tmp_path / "test.wav"
+        wav_file.write_bytes(b"fake audio")
+
+        monkeypatch.setattr(
+            "faster_whisper.decode_audio",
+            lambda path, sampling_rate=16000: [0.0] * 16000,
+        )
+
+        class FakeModel:
+            def recognize(self, waveform, sample_rate, language=None):
+                return iter(())
+
+        backend = OnnxAsrBackend()
+        backend.ensure_model_available(model_name, "int8")
+
+        if expects_warning:
+            with pytest.warns(
+                UserWarning,
+                match=(
+                    r"Язык 'en'.*--device openvino-cpu --model medium.*"
+                    r"--device cuda --model medium"
+                ),
+            ):
+                backend.transcribe(FakeModel(), wav_file, language=language)
+        else:
+            with warnings.catch_warnings(record=True) as caught:
+                backend.transcribe(FakeModel(), wav_file, language=language)
+            assert caught == []
+
+    def test_auto_language_uses_single_supported_model_language(
+        self, monkeypatch, tmp_path
+    ):
+        wav_file = tmp_path / "test.wav"
+        wav_file.write_bytes(b"fake audio")
+        monkeypatch.setattr(
+            "faster_whisper.decode_audio",
+            lambda path, sampling_rate=16000: [0.0] * 16000,
+        )
+
+        class FakeModel:
+            def recognize(self, waveform, sample_rate, language=None):
+                return iter(())
+
+        backend = OnnxAsrBackend()
+        backend.ensure_model_available("gigaam-v3-e2e-rnnt", "int8")
+
+        result = backend.transcribe(FakeModel(), wav_file, language=None)
+
+        assert result.language == "ru"
+        assert result.language_probability == 0.0
+
     def test_transcribe_collects_segments(self, monkeypatch, tmp_path):
         """Verify transcribe maps VAD segments to project Segments."""
         wav_file = tmp_path / "test.wav"
@@ -386,3 +450,23 @@ class TestModelAliases:
         backend = OnnxAsrBackend()
         with pytest.raises(ValueError, match="Неподдерживаемая модель"):
             backend._resolve_model("nonexistent-model")
+
+    def test_whisper_alias_error_suggests_explicit_backend(self):
+        backend = OnnxAsrBackend()
+
+        with pytest.raises(
+            ValueError,
+            match=r"Whisper.*--device openvino-cpu.*--device cuda",
+        ):
+            backend._resolve_model("medium")
+
+    def test_turbo_whisper_error_suggests_models_supported_by_backends(self):
+        backend = OnnxAsrBackend()
+
+        with pytest.raises(ValueError) as exc_info:
+            backend._resolve_model("large-v3-turbo")
+
+        message = str(exc_info.value)
+        assert "--device openvino-cpu --model large-v3-turbo" in message
+        assert "--device cuda --model medium" in message
+        assert "--device cuda --model large-v3-turbo" not in message

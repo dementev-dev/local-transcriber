@@ -57,6 +57,19 @@ def _format_device_info(device_used: str) -> str:
     return "CPU"
 
 
+def _format_language_mode(
+    requested_language: str, result: TranscribeResult
+) -> str:
+    """Описывает источник языка, не выдавая профиль модели за детектор."""
+    if requested_language != "auto":
+        return "forced"
+    if result.language_probability > 0:
+        return "detected"
+    if result.language not in {"", "auto", "unknown"}:
+        return "из профиля модели"
+    return "не определён"
+
+
 def _format_repetition_blocks(
     blocks: list[RepetitionBlock],
     use_hours: bool,
@@ -315,7 +328,7 @@ def _run_single(
         )
 
     device_info = _format_device_info(result.device_used)
-    language_mode = "detected" if defaults["language"] == "auto" else "forced"
+    language_mode = _format_language_mode(defaults["language"], result)
 
     content = format_transcript(
         result=result,
@@ -401,8 +414,6 @@ def _run_batch(
     # Phase 3: Transcribe
     processed = 0
     failed = 0
-    language_mode = "detected" if defaults["language"] == "auto" else "forced"
-
     batch_start = time.monotonic()
 
     for i, file in enumerate(to_process, 1):
@@ -442,6 +453,7 @@ def _run_batch(
             model_path = tfr.model_path
 
             result = tfr.result
+            language_mode = _format_language_mode(defaults["language"], result)
 
             if len(result.segments) == 0:
                 console.print(

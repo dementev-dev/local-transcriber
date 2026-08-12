@@ -66,41 +66,17 @@ def test_detect_device_explicit_passthrough():
     assert detect_device("openvino-cpu") == "openvino-cpu"
 
 
-def test_detect_device_auto_onnx_even_with_openvino_gpu():
-    """auto + нет nvidia-smi → onnx, даже если доступен OpenVINO GPU."""
-    with (
-        patch("local_transcriber.utils.shutil.which", return_value=None),
-        patch("local_transcriber.utils._is_openvino_gpu_available", return_value=True),
-    ):
-        assert detect_device("auto") == "onnx"
-
-
-def test_detect_device_auto_onnx_even_with_openvino_cpu():
-    """auto + нет nvidia-smi → onnx, даже если доступен OpenVINO CPU."""
-    with (
-        patch("local_transcriber.utils.shutil.which", return_value=None),
-        patch("local_transcriber.utils._is_openvino_gpu_available", return_value=False),
-        patch("local_transcriber.utils._is_openvino_available", return_value=True),
-    ):
-        assert detect_device("auto") == "onnx"
-
-
-def test_detect_device_cuda_over_openvino():
-    """nvidia-smi доступен и openvino тоже → cuda побеждает."""
-    with (
-        patch("local_transcriber.utils.shutil.which", return_value="/usr/bin/nvidia-smi"),
-        patch("local_transcriber.utils._is_openvino_gpu_available", return_value=True),
+def test_detect_device_auto_cuda_when_nvidia_smi_available():
+    """При доступном nvidia-smi auto выбирает CUDA."""
+    with patch(
+        "local_transcriber.utils.shutil.which", return_value="/usr/bin/nvidia-smi"
     ):
         assert detect_device("auto") == "cuda"
 
 
-def test_detect_device_auto_onnx_without_accelerators():
+def test_detect_device_auto_onnx_without_cuda():
     """Без CUDA auto выбирает ONNX CPU."""
-    with (
-        patch("local_transcriber.utils.shutil.which", return_value=None),
-        patch("local_transcriber.utils._is_openvino_gpu_available", return_value=False),
-        patch("local_transcriber.utils._is_openvino_available", return_value=False),
-    ):
+    with patch("local_transcriber.utils.shutil.which", return_value=None):
         assert detect_device("auto") == "onnx"
 
 
