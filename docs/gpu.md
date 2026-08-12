@@ -6,7 +6,7 @@
 - `cuda` — строго NVIDIA GPU, ошибка если недоступен
 - `openvino` — авто-выбор OpenVINO GPU или CPU
 - `openvino-gpu` — строго Intel GPU через OpenVINO
-- `openvino-cpu` — строго CPU через OpenVINO (ускорение 2-4x на x86)
+- `openvino-cpu` — строго CPU через OpenVINO (3-10x на x86, зависит от модели)
 - `cpu` — строго CPU (faster-whisper/CTranslate2)
 
 ## Какой бэкенд на каком оборудовании
@@ -21,6 +21,10 @@
 
 \* По результатам контрольных прогонов на Intel и AMD CPU. Реальная скорость
 зависит от CPU, модели и записи.
+
+Автоматический профиль без NVIDIA рассчитан на русскую речь: GigaAM других
+языков не понимает. Для них берите Whisper — `openvino-cpu` на x86 или `cpu`
+на любой платформе.
 
 ## OpenVINO
 
@@ -43,6 +47,13 @@ OpenVINO ускоряет inference на x86 процессорах (Intel и AM
 | medium | OpenVINO/whisper-medium-int8-ov | OpenVINO/whisper-medium-fp16-ov |
 | large-v3 | OpenVINO/whisper-large-v3-int8-ov | OpenVINO/whisper-large-v3-fp16-ov |
 | large-v3-turbo | OpenVINO/whisper-large-v3-turbo-int8-ov | OpenVINO/whisper-large-v3-turbo-fp16-ov |
+
+Размер в кеше HuggingFace: `medium` int8 — 748 MB, `large-v3-turbo` int8 —
+790 MB, `large-v3-turbo` fp16 — 1552 MB. Это меньше, чем у тех же моделей для
+faster-whisper, потому что веса уже квантизированы.
+
+Модель `large-v3-turbo` доступна только в OpenVINO: для `--device cuda` и
+`--device cpu` каталог faster-whisper заканчивается на `large-v3`.
 
 ### Результаты тестирования OpenVINO
 
