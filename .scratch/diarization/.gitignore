@@ -1,0 +1,6 @@
+# модели диаризации — 33 МБ, скачиваются по README
+models/
+
+# выход замеров
+segments-*.tsv
+conflict-*.json
