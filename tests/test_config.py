@@ -71,11 +71,17 @@ def test_load_config_invalid_device(tmp_path):
 
 
 def test_resolve_defaults_cli_wins():
-    config = {"model": "tiny", "language": "en"}
-    cli = {"model": "small", "language": None, "device": None, "compute_type": None}
+    config = {"model": "tiny", "language": "en", "device": "openvino-cpu"}
+    cli = {
+        "model": "small",
+        "language": None,
+        "device": "onnx",
+        "compute_type": None,
+    }
     result = resolve_defaults(cli, config)
     assert result["model"] == "small"
     assert result["language"] == "en"
+    assert result["device"] == "onnx"
 
 
 def test_resolve_defaults_config_wins():

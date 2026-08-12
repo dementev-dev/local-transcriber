@@ -2,6 +2,7 @@
 
 **Статус**: Принято
 **Дата**: 2026-03-21
+**Обновлено**: 2026-08-12
 
 ## Контекст
 
@@ -39,7 +40,8 @@ shared libraries. Ни то, ни другое не должно происхо�
 Вместо отдельного `--backend` флага устройство само определяет бэкенд:
 - `cuda`, `cpu` → FasterWhisperBackend
 - `openvino` → OpenVINOBackend
-- `auto` → CUDA (nvidia-smi) → OpenVINO (import check + x86) → CPU
+- `onnx` → OnnxAsrBackend
+- `auto` → CUDA при наличии `nvidia-smi`, иначе ONNX на CPU
 
 ### load_model() — единственный владелец pipeline
 
@@ -71,18 +73,19 @@ OpenVINO модели предквантизированы (int8/fp16), compute_
 - Из дефолтов: для large-v3 автоматически выбирается fp16 (стабильнее по качеству)
 - Несуществующая пара (model + compute_type) при явном выборе → ошибка
 
-### Обе зависимости по умолчанию
+### Зависимости бэкендов по умолчанию
 
-faster-whisper (~37MB) и openvino-genai (~69MB) ставятся вместе — суммарно ~106MB,
-приемлемо. Модели скачиваются только для активного бэкенда. CUDA (nvidia-cublas-cu12,
-~554MB) остаётся conditional (Linux x86_64). OpenVINO — conditional (x86_64/AMD64, не macOS).
+faster-whisper, onnx-asr/onnxruntime и openvino-genai ставятся вместе. Модели
+скачиваются только для активного бэкенда. CUDA (`nvidia-cublas-cu12`) остаётся
+conditional для Linux x86_64. OpenVINO — conditional для x86_64/AMD64, кроме
+macOS; ONNX обеспечивает автоматический CPU-путь на остальных платформах.
 
 ## Последствия
 
 - Обратная совместимость: `transcribe()` сохранён; `load_model()` изменил сигнатуру (возвращает 4-tuple вместо 2-tuple, добавлен `compute_type_explicit`)
 - Новый бэкенд добавляется одним файлом в `backends/` + регистрацией в `__init__.py`
 - Модели скачиваются по запросу — CUDA пользователь не качает OpenVINO модели, и наоборот
-- ARM и macOS: OpenVINO не ставится (platform markers), работает CPU через faster-whisper
+- ARM и macOS: OpenVINO не ставится (platform markers), auto использует ONNX
 
 ## Отклонённые альтернативы
 

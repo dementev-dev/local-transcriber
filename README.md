@@ -8,7 +8,7 @@ transcribe meeting.mp4
 ```
 
 - **Полностью локально** — данные не покидают машину
-- **Авто-ускорение** — NVIDIA CUDA, Intel GPU (OpenVINO), ONNX (CPU), OpenVINO CPU или CPU fallback
+- **Авто-ускорение** — NVIDIA CUDA при наличии GPU, иначе ONNX на CPU
 - **Батч-режим** — обработка нескольких файлов за один вызов
 - **Из проводника Windows** — пункт Transcribe в меню «Отправить» ([установка](#контекстное-меню-проводника-windows))
 - **Markdown с таймкодами** — удобен для суммаризации ИИ
@@ -33,18 +33,20 @@ uv tool install git+https://github.com/dementev-dev/local-transcriber
 
 **3. Ускорение (ставится автоматически):**
 
-- **Intel GPU** (Arc, встроенная графика): работает через OpenVINO — ускорение в ~2x vs CPU
-- **OpenVINO** (Intel/AMD x86 CPU): ставится автоматически на Linux и Windows — ускорение в 2-4x
 - **NVIDIA CUDA** (GPU): если есть GPU — транскрипция в 5-10× быстрее
   - **Windows**: `winget install -e --id Nvidia.CUDA --version 12.9` (от администратора), перезапустить терминал
   - **Linux / WSL2**: работает из коробки (нужен только драйвер: `nvidia-smi`)
+- **Без NVIDIA GPU**: автоматически используется ONNX с GigaAM RNN-T на CPU
+- **OpenVINO** для Intel GPU или x86 CPU остаётся доступен через явный
+  `--device openvino`, `--device openvino-gpu` или `--device openvino-cpu`
 
 **4. Готово:**
 
 ```bash
 transcribe meeting.mp4
 ```
-Модели скачиваются автоматически при первом запуске (~1.5 GB для medium), нужен доступ в интернет.
+Модели скачиваются автоматически при первом запуске; размер зависит от выбранного
+профиля, нужен доступ в интернет.
 
 <details>
 <summary><code>transcribe: command not found</code></summary>
@@ -103,7 +105,7 @@ HuggingFace Hub использует симлинки для экономии м
 ## Использование
 
 ```bash
-# Простой запуск (medium, русский, автодетект устройства)
+# Простой запуск (CUDA medium или ONNX GigaAM RNN-T, язык ru)
 transcribe meeting.mp4
 
 # Указать язык
@@ -180,11 +182,11 @@ transcribe --uninstall-menu
 
 | Опция | Сокращение | По умолчанию | Описание |
 |-------|-----------|-------------|----------|
-| `--model` | `-m` | `medium` | Модель Whisper |
+| `--model` | `-m` | medium (CUDA) / gigaam-v3-e2e-rnnt (ONNX) | Модель распознавания |
 | `--language` | `-l` | `ru` | Язык (ru, en, auto и др.) |
 | `--output` | `-o` | `<файл>-transcript.md` | Путь к выходному файлу |
 | `--device` | `-d` | `auto` | Устройство (auto, cpu, cuda, openvino, openvino-gpu, openvino-cpu, onnx) |
-| `--compute-type` | — | float16 (CUDA) / int8 (OpenVINO/ONNX) / float32 (CPU) | Тип вычислений |
+| `--compute-type` | — | float16 (CUDA) / int8 (ONNX/OpenVINO) / float32 (CPU) | Тип вычислений |
 | `--threads` | `-t` | 0 (авто) | Потоки CPU (рекомендуется = число физ. ядер) |
 | `--force` | `-f` | — | Перезаписать существующие транскрипты |
 | `--verbose` | `-v` | — | Подробный вывод |
@@ -193,10 +195,9 @@ transcribe --uninstall-menu
 
 |  | Linux / WSL2 | macOS | Windows |
 |---|---|---|---|
-| CPU | ✅ | ✅ | ✅ |
-| OpenVINO (x86 CPU) | ✅ авто | — | ✅ авто |
-| OpenVINO (Intel GPU) | ✅ авто | — | ✅ авто |
-| ONNX (CPU) | ✅ явно | ✅ явно | ✅ явно |
+| CPU через ONNX | ✅ авто | ✅ авто | ✅ авто |
+| OpenVINO (x86 CPU) | ✅ явно | — | ✅ явно |
+| OpenVINO (Intel GPU) | ✅ явно | — | ✅ явно |
 | GPU (NVIDIA) | ✅ авто | — | ✅ (нужен CUDA 12) |
 
 <details>
@@ -237,8 +238,10 @@ transcribe --uninstall-menu
 Дефолтные параметры можно задать в `.transcriber.toml`:
 
 ```toml
-model = "large-v3"
-language = "en"
+device = "openvino-cpu"
+model = "large-v3-turbo"
+compute_type = "int8"
+language = "ru"
 ```
 
 Порядок поиска:
@@ -246,6 +249,11 @@ language = "en"
 2. `~/.config/transcriber/config.toml`
 
 Приоритет: **CLI-аргумент > конфиг > device-aware дефолт > встроенный дефолт**.
+
+При `device = "auto"` выбирается CUDA, если доступен `nvidia-smi`, иначе ONNX.
+Явный `device` из CLI или конфига отключает этот автоматический выбор.
+Каталоги моделей различаются между бэкендами, поэтому при закреплении `model`
+в конфиге рекомендуется явно закрепить и совместимый `device`.
 
 Дефолты зависят от устройства:
 
@@ -258,7 +266,7 @@ language = "en"
 ## Модели и GPU
 
 Рекомендации:
-- **По умолчанию для ONNX:** `gigaam-v3-e2e-rnnt` — читаемый русский текст с
+- **По умолчанию без CUDA:** ONNX `gigaam-v3-e2e-rnnt` — читаемый русский текст с
   пунктуацией почти без потери скорости относительно сырого `gigaam-v3`
 - **Макс. качество (NVIDIA):** `large-v3` + `--compute-type float16`
 - **Макс. качество (Intel GPU):** `large-v3` + `--device openvino-gpu`

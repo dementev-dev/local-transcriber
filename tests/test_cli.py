@@ -73,27 +73,32 @@ def test_cli_happy_path_exit_code_zero(tmp_path):
 def test_cli_default_options_passed_to_transcribe(tmp_path):
     audio = tmp_path / "test.mp3"
     audio.write_bytes(b"fake")
-    result = _make_result()
+    result = _make_result(device_used="onnx")
     model = _make_model()
     backend = _make_backend()
-    tfr = _make_tfr(result=result, model=model, backend=backend)
+    tfr = _make_tfr(result=result, model=model, actual_device="onnx", backend=backend)
     mock_transcribe_file = MagicMock(return_value=tfr)
 
     with (
         patch("local_transcriber.cli.load_config", return_value={}),
         patch("local_transcriber.cli.validate_input_file", return_value=audio),
-        patch("local_transcriber.cli.detect_device", return_value="cpu"),
-        patch("local_transcriber.cli.load_model", return_value=(model, "cpu", backend, "/models/medium")),
+        patch("local_transcriber.cli.detect_device", return_value="onnx"),
+        patch(
+            "local_transcriber.cli.load_model",
+            return_value=(model, "onnx", backend, "/models/gigaam-v3-e2e-rnnt"),
+        ),
         patch("local_transcriber.cli._transcribe_file", mock_transcribe_file),
         patch("local_transcriber.cli.write_transcript"),
     ):
-        runner.invoke(app, [str(audio)])
+        out = runner.invoke(app, [str(audio)])
 
     call_kwargs = mock_transcribe_file.call_args[1]
-    assert call_kwargs["model_name"] == "medium"
-    assert call_kwargs["compute_type"] == "float32"
+    assert call_kwargs["model_name"] == "gigaam-v3-e2e-rnnt"
+    assert call_kwargs["compute_type"] == "int8"
     assert call_kwargs["language"] == "ru"
     assert call_kwargs["on_segment"] is None  # verbose=False
+    assert "Модель: gigaam-v3-e2e-rnnt" in out.output
+    assert "Устройство: onnx" in out.output
 
 
 def test_cli_custom_options(tmp_path):
@@ -658,6 +663,45 @@ def test_cli_config_applied(tmp_path):
 
     # load_model receives model name from config
     assert mock_load_model.call_args[0][0] == "tiny"
+
+
+def test_cli_config_overrides_auto_device(tmp_path):
+    audio = tmp_path / "test.mp3"
+    audio.write_bytes(b"fake")
+    model = _make_model()
+    backend = _make_backend()
+    result = _make_result(device_used="openvino-cpu")
+    tfr = _make_tfr(
+        result=result,
+        model=model,
+        actual_device="openvino-cpu",
+        backend=backend,
+    )
+    mock_detect_device = MagicMock(return_value="openvino-cpu")
+    mock_load_model = MagicMock(
+        return_value=(model, "openvino-cpu", backend, "/models/medium")
+    )
+
+    with (
+        patch(
+            "local_transcriber.cli.load_config",
+            return_value={
+                "device": "openvino-cpu",
+                "model": "medium",
+                "compute_type": "int8",
+            },
+        ),
+        patch("local_transcriber.cli.validate_input_file", return_value=audio),
+        patch("local_transcriber.cli.detect_device", mock_detect_device),
+        patch("local_transcriber.cli.load_model", mock_load_model),
+        patch("local_transcriber.cli._transcribe_file", return_value=tfr),
+        patch("local_transcriber.cli.write_transcript"),
+    ):
+        out = runner.invoke(app, [str(audio)])
+
+    assert out.exit_code == 0
+    assert mock_detect_device.call_args_list[0].args == ("openvino-cpu",)
+    assert mock_load_model.call_args.args[:3] == ("medium", "openvino-cpu", "int8")
 
 
 def test_cli_cli_overrides_config(tmp_path):

@@ -114,7 +114,11 @@ def _print_quality_warnings(result: TranscribeResult, file_name: str | None = No
 def main(
     files: list[Path] | None = typer.Argument(None, help="Пути к аудио/видеофайлам"),
     model: str | None = typer.Option(
-        None, "--model", "-m", show_default=False, help="Модель Whisper [по умолч.: medium]"
+        None,
+        "--model",
+        "-m",
+        show_default=False,
+        help="Модель [по умолч.: medium (CUDA) / gigaam-v3-e2e-rnnt (ONNX)]",
     ),
     language: str | None = typer.Option(
         None, "--language", "-l", show_default=False, help="Язык [по умолч.: ru]"
@@ -126,7 +130,10 @@ def main(
     ),
     compute_type: str | None = typer.Option(
         None, "--compute-type", show_default=False,
-        help="Тип вычислений [по умолч.: float16 (CUDA) / int8 (OpenVINO GPU/CPU) / float32 (CPU)]"
+        help=(
+            "Тип вычислений [по умолч.: float16 (CUDA) / "
+            "int8 (ONNX/OpenVINO) / float32 (CPU)]"
+        ),
     ),
     threads: int = typer.Option(
         0, "--threads", "-t", show_default=False, min=0,

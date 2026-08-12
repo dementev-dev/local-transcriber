@@ -61,27 +61,28 @@ def test_detect_device_explicit_passthrough():
     """Явные device strings проходят без изменений."""
     assert detect_device("cpu") == "cpu"
     assert detect_device("cuda") == "cuda"
+    assert detect_device("onnx") == "onnx"
     assert detect_device("openvino-gpu") == "openvino-gpu"
     assert detect_device("openvino-cpu") == "openvino-cpu"
 
 
-def test_detect_device_auto_openvino_gpu():
-    """auto + нет nvidia-smi + есть OpenVINO GPU → openvino-gpu."""
+def test_detect_device_auto_onnx_even_with_openvino_gpu():
+    """auto + нет nvidia-smi → onnx, даже если доступен OpenVINO GPU."""
     with (
         patch("local_transcriber.utils.shutil.which", return_value=None),
         patch("local_transcriber.utils._is_openvino_gpu_available", return_value=True),
     ):
-        assert detect_device("auto") == "openvino-gpu"
+        assert detect_device("auto") == "onnx"
 
 
-def test_detect_device_auto_openvino_cpu():
-    """auto + нет nvidia-smi + есть OpenVINO, нет GPU → openvino-cpu."""
+def test_detect_device_auto_onnx_even_with_openvino_cpu():
+    """auto + нет nvidia-smi → onnx, даже если доступен OpenVINO CPU."""
     with (
         patch("local_transcriber.utils.shutil.which", return_value=None),
         patch("local_transcriber.utils._is_openvino_gpu_available", return_value=False),
         patch("local_transcriber.utils._is_openvino_available", return_value=True),
     ):
-        assert detect_device("auto") == "openvino-cpu"
+        assert detect_device("auto") == "onnx"
 
 
 def test_detect_device_cuda_over_openvino():
@@ -93,14 +94,14 @@ def test_detect_device_cuda_over_openvino():
         assert detect_device("auto") == "cuda"
 
 
-def test_detect_device_auto_cpu_fallback():
-    """Ни nvidia-smi, ни openvino → cpu."""
+def test_detect_device_auto_onnx_without_accelerators():
+    """Без CUDA auto выбирает ONNX CPU."""
     with (
         patch("local_transcriber.utils.shutil.which", return_value=None),
         patch("local_transcriber.utils._is_openvino_gpu_available", return_value=False),
         patch("local_transcriber.utils._is_openvino_available", return_value=False),
     ):
-        assert detect_device("auto") == "cpu"
+        assert detect_device("auto") == "onnx"
 
 
 def test_detect_device_openvino_resolves_to_gpu():
