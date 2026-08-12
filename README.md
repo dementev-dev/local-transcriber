@@ -263,7 +263,8 @@ language = "en"
 - **Макс. качество (NVIDIA):** `large-v3` + `--compute-type float16`
 - **Макс. качество (Intel GPU):** `large-v3` + `--device openvino-gpu`
 - **Макс. скорость CPU (русский):** `--device onnx --model gigaam-v3` (17-29× RTF, без пунктуации; рекомендуется LLM-нормализация терминов после)
-- **CPU с пунктуацией (русский):** `--device openvino-cpu --model medium` (5-6× RTF; для встреч ≤30 мин с равномерной громкостью — на длинных файлах с тихими фрагментами возможны галлюцинации)
+- **Быстрый OpenVINO с низким WER:** `--device openvino-cpu --model large-v3-turbo --compute-type int8` (7,2× RTFx на контрольном Intel CPU; пунктуация может быть слабой)
+- **OpenVINO для чтения и конспекта:** `--device openvino-cpu --model medium` (около 6× RTFx; независимая оценка показала лучшую сохранность содержания, чем turbo)
 - **Быстрый тест:** `tiny` — для проверки пайплайна
 
 <details>
@@ -276,6 +277,7 @@ language = "en"
 | `small` | ~460 MB | ~1.5 GB | ★★★ | ★★★ |
 | `medium` | ~1.5 GB | ~2.5 GB | ★★ | ★★★★ |
 | `large-v3` | ~3 GB | ~2.5 GB | ★ | ★★★★★ |
+| `large-v3-turbo` | ~1 GB | — | ★★★★ | ★★★★ |
 
 #### ONNX-модели (`--device onnx`)
 
@@ -331,11 +333,15 @@ device-aware дефолт недоступен для выбранной мод�
 `float16`/`fp16` и `float32` значительно стабильнее на записях >20 минут.
 
 > Для OpenVINO `--compute-type` выбирает предквантизированную модель (int8 или fp16),
-> а не runtime-параметр. Для `large-v3` по умолчанию выбирается `fp16`.
+> а не параметр времени выполнения. Для `large-v3` по умолчанию выбирается
+> `fp16`; для `large-v3-turbo` доступны явные варианты `int8` и `fp16`, а
+> неявный профиль OpenVINO использует `int8`.
 
 </details>
 
-Подробнее: бенчмарки, OpenVINO, совместимость GPU, результаты тестирования — [docs/gpu.md](docs/gpu.md).
+Подробнее: бенчмарки, OpenVINO, совместимость GPU, результаты тестирования —
+[docs/gpu.md](docs/gpu.md). Сравнение `large-v3-turbo` с CPU-профилями:
+[OpenVINO 2026.3 и large-v3-turbo](docs/benchmarks/2026-08-12-openvino-large-v3-turbo-comparison.md).
 
 <details>
 <summary>Формат вывода</summary>

@@ -28,6 +28,8 @@ OpenVINO ускоряет inference на x86 процессорах (Intel и AM
 
 - **Модели**: предконвертированные из [HuggingFace](https://huggingface.co/OpenVINO) (int8/fp16)
 - **Дефолт**: `medium` + `int8` (для `large-v3` автоматически выбирается `fp16`)
+- **Быстрый профиль с низким WER**: явный `large-v3-turbo` + `int8`; для
+  читаемости и сохранности содержания `medium` остаётся предпочтительнее
 - **Аудиодекодирование**: через PyAV (бандлит FFmpeg), системный ffmpeg не нужен
 
 ### Доступные OpenVINO модели
@@ -39,8 +41,15 @@ OpenVINO ускоряет inference на x86 процессорах (Intel и AM
 | small | OpenVINO/whisper-small-int8-ov | — |
 | medium | OpenVINO/whisper-medium-int8-ov | OpenVINO/whisper-medium-fp16-ov |
 | large-v3 | OpenVINO/whisper-large-v3-int8-ov | OpenVINO/whisper-large-v3-fp16-ov |
+| large-v3-turbo | OpenVINO/whisper-large-v3-turbo-int8-ov | OpenVINO/whisper-large-v3-turbo-fp16-ov |
 
 ### Результаты тестирования OpenVINO
+
+Актуальное сравнение OpenVINO 2026.3 на трёх русскоязычных встречах:
+[medium, large-v3-turbo и GigaAM](benchmarks/2026-08-12-openvino-large-v3-turbo-comparison.md).
+На Intel Core i7-11800H `large-v3-turbo` INT8 обработал 43:37 аудио за
+365,5 секунды (7,16× RTFx) при WER 24,0%. FP16 занял 545,0 секунды и получил
+WER 24,8%, поэтому для CPU рекомендуется INT8.
 
 Реальные записи рабочих созвонов (русский, техтермины: SQL, PostgreSQL, LDAP, DLP и др.).
 
@@ -76,6 +85,10 @@ OpenVINO ускоряет inference на x86 процессорах (Intel и AM
 - **small** — для быстрого сканирования большого объёма видео по маске (`*.mp4`). Ошибки в отдельных словах; для обработки ИИ (МОМ, конспект) рискованно — "рецензия" вместо "лицензия" может исказить смысл.
 - **medium** — для повседневного использования и обработки ИИ. Ключевые термины верные, единичные ляпы не влияют на смысл конспекта. Оптимальный баланс скорости и качества.
 - **large-v3** — для важных записей, где нужна дословная точность. Лучшая пунктуация и связность. На OpenVINO (416с) быстрее, чем medium на чистом CPU (734с) — лучшее качество при выше скорости.
+- **large-v3-turbo** — явный профиль для CPU с приоритетом скорости и низкого
+  WER. В проверенном наборе INT8 быстрее и численно точнее medium, но хуже по
+  независимой оценке читаемости и сохранности содержания; FP16 на CPU пользы
+  не показал.
 
 ## CPU бэкенд (CTranslate2 / faster-whisper)
 
