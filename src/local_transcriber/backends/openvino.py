@@ -23,6 +23,8 @@ MODEL_REPOS: dict[tuple[str, str], str] = {
     ("medium", "fp16"): "OpenVINO/whisper-medium-fp16-ov",
     ("large-v3", "int8"): "OpenVINO/whisper-large-v3-int8-ov",
     ("large-v3", "fp16"): "OpenVINO/whisper-large-v3-fp16-ov",
+    ("large-v3-turbo", "int8"): "OpenVINO/whisper-large-v3-turbo-int8-ov",
+    ("large-v3-turbo", "fp16"): "OpenVINO/whisper-large-v3-turbo-fp16-ov",
 }
 
 # Fallback: если точная пара не найдена, пробуем альтернативный compute_type
