@@ -257,6 +257,7 @@ class TestTranscribe:
                 UserWarning,
                 match=(
                     r"Язык 'en'.*--device openvino-cpu --model medium.*"
+                    r"--device cpu --model medium.*"
                     r"--device cuda --model medium"
                 ),
             ):
@@ -460,6 +461,13 @@ class TestModelAliases:
         ):
             backend._resolve_model("medium")
 
+    def test_whisper_error_offers_platform_independent_backend(self):
+        """На macOS и ARM нет ни OpenVINO, ни CUDA — нужен путь через cpu."""
+        backend = OnnxAsrBackend()
+
+        with pytest.raises(ValueError, match=r"--device cpu --model medium"):
+            backend._resolve_model("medium")
+
     def test_turbo_whisper_error_suggests_models_supported_by_backends(self):
         backend = OnnxAsrBackend()
 
@@ -469,4 +477,6 @@ class TestModelAliases:
         message = str(exc_info.value)
         assert "--device openvino-cpu --model large-v3-turbo" in message
         assert "--device cuda --model medium" in message
+        assert "--device cpu --model medium" in message
         assert "--device cuda --model large-v3-turbo" not in message
+        assert "--device cpu --model large-v3-turbo" not in message

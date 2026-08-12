@@ -55,6 +55,9 @@ _PARAKEET_V3_LANGUAGES = frozenset(
 _WHISPER_MODEL_NAMES = frozenset(
     {"tiny", "base", "small", "medium", "large-v3", "large-v3-turbo"}
 )
+# faster-whisper не знает turbo, поэтому для cpu и cuda подсказываем medium.
+# Источник правды — MODEL_REPOS в backends/faster_whisper.py и backends/openvino.py
+_OPENVINO_ONLY_WHISPER_MODELS = frozenset({"large-v3-turbo"})
 
 MODEL_CATALOG: dict[str, OnnxModelSpec] = {
     "gigaam-v3": OnnxModelSpec(
@@ -253,11 +256,13 @@ class OnnxAsrBackend:
         if model_name in MODEL_ALIASES:
             return MODEL_ALIASES[model_name]
         if model_name in _WHISPER_MODEL_NAMES:
+            fallback = _whisper_fallback_model(model_name)
             raise ValueError(
                 f"Модель '{model_name}' относится к Whisper и не поддерживается "
                 "ONNX-бэкендом. Без CUDA --device auto выбирает ONNX; "
-                f"укажите --device openvino-cpu --model {model_name} "
-                "или --device cuda --model medium."
+                f"укажите --device openvino-cpu --model {model_name} на x86, "
+                f"--device cpu --model {fallback} на любой платформе "
+                f"или --device cuda --model {fallback} при NVIDIA GPU."
             )
         if "/" in model_name or model_name.count("-") >= 2:
             # Looks like a raw onnx-asr name — allow passthrough
@@ -280,9 +285,10 @@ class OnnxAsrBackend:
         warnings.warn(
             f"Язык '{language}' не поддерживается моделью '{self._model_name}' "
             f"(поддерживаются: {supported}). Результат может быть некорректным. "
-            "Для других языков используйте "
-            "--device openvino-cpu --model medium "
-            "или --device cuda --model medium.",
+            "Для других языков возьмите Whisper: "
+            "--device openvino-cpu --model medium на x86, "
+            "--device cpu --model medium на любой платформе "
+            "или --device cuda --model medium при NVIDIA GPU.",
             UserWarning,
             stacklevel=2,
         )
@@ -302,6 +308,13 @@ def _preferred_compute_type(quantizations: frozenset[str | None]) -> str:
         if quantization in quantizations:
             return _compute_type_for_quantization(quantization)
     raise ValueError("Для ONNX-модели не указаны доступные квантизации")
+
+
+def _whisper_fallback_model(model_name: str) -> str:
+    """Модель для подсказки про faster-whisper: turbo там недоступен."""
+    if model_name in _OPENVINO_ONLY_WHISPER_MODELS:
+        return "medium"
+    return model_name
 
 
 def _model_language(spec: OnnxModelSpec | None) -> str | None:
