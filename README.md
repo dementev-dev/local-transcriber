@@ -28,7 +28,7 @@ powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | ie
 **2. Установить transcriber:**
 
 ```bash
-uv tool install git+https://github.com/dementev-dev/local-transcriber
+uv tool install git+https://git.dementev.space/ddmitry/local-transcriber.git
 ```
 
 **3. Ускорение (ставится автоматически):**
@@ -62,7 +62,7 @@ transcribe meeting.mp4
 **Обновление:**
 
 ```bash
-uv tool install --force git+https://github.com/dementev-dev/local-transcriber
+uv tool install --force git+https://git.dementev.space/ddmitry/local-transcriber.git
 ```
 
 **Удаление:**
