@@ -2,12 +2,16 @@ from datetime import datetime
 from pathlib import Path
 
 from local_transcriber.formatter import (
+    LANGUAGE_DETECTED,
+    LANGUAGE_FORCED,
+    LANGUAGE_UNKNOWN,
     _group_segments,
     format_timestamp,
     format_transcript,
     write_transcript,
 )
 from local_transcriber.transcriber import Segment, TranscribeResult
+from local_transcriber.types import UNKNOWN_LANGUAGE
 
 
 def test_format_timestamp_minutes():
@@ -40,19 +44,40 @@ def test_format_transcript_basic():
         source_filename="meeting.mp4",
         model_name="large-v3",
         device_info="CUDA (NVIDIA GeForce RTX 3060)",
-        language_mode="detected",
+        language_mode=LANGUAGE_DETECTED,
         transcription_date=datetime(2026, 3, 17, 14, 30, 5),
     )
 
     assert "# Транскрипт: meeting.mp4" in content
     assert "**Дата транскрипции**: 2026-03-17 14:30:05" in content
     assert "**Модель**: large-v3" in content
-    assert "**Язык**: ru (detected)" in content
+    assert "**Язык**: ru (определён автоматически)" in content
     assert "**Длительность**: 02:00" in content
     assert "**Устройство**: CUDA (NVIDIA GeForce RTX 3060)" in content
     assert "---" in content
     # Соседние сегменты без паузы объединяются в один абзац
     assert "[00:00.00 - 00:09.15] Добрый день, коллеги. Первый вопрос." in content
+
+
+def test_format_transcript_unknown_language_without_placeholder():
+    """Неизвестный язык печатается одной строкой, без служебного значения."""
+    result = TranscribeResult(
+        segments=[Segment(start=0.0, end=4.0, text=" Добрый день.")],
+        language=UNKNOWN_LANGUAGE,
+        language_probability=0.0,
+        duration=120.0,
+        device_used="openvino-cpu",
+    )
+    content = format_transcript(
+        result,
+        source_filename="meeting.mp4",
+        model_name="medium",
+        device_info="OpenVINO (CPU)",
+        language_mode=LANGUAGE_UNKNOWN,
+    )
+
+    assert "**Язык**: не определён" in content
+    assert UNKNOWN_LANGUAGE not in content
 
 
 def test_format_transcript_segment_no_leading_space():
@@ -69,7 +94,7 @@ def test_format_transcript_segment_no_leading_space():
         source_filename="f.mp3",
         model_name="tiny",
         device_info="CPU",
-        language_mode="detected",
+        language_mode=LANGUAGE_DETECTED,
         transcription_date=datetime(2026, 1, 1, 0, 0, 0),
     )
     assert "[00:00.00 - 00:02.00] Hello" in content
@@ -88,7 +113,7 @@ def test_format_transcript_empty():
         source_filename="silence.wav",
         model_name="tiny",
         device_info="CPU",
-        language_mode="detected",
+        language_mode=LANGUAGE_DETECTED,
         transcription_date=datetime(2026, 1, 1, 0, 0, 0),
     )
 
@@ -113,12 +138,12 @@ def test_format_transcript_long():
         source_filename="long.mp4",
         model_name="large-v3",
         device_info="CUDA",
-        language_mode="forced",
+        language_mode=LANGUAGE_FORCED,
         transcription_date=datetime(2026, 3, 17, 10, 0, 0),
     )
 
     assert "**Длительность**: 01:03:20" in content
-    assert "**Язык**: en (forced)" in content
+    assert "**Язык**: en (задан явно)" in content
     # Timestamps should use hours format
     assert "[00:00:00.00 - 00:00:10.50] Начало." in content
     assert "[01:01:40.00 - 01:01:50.25] Конец." in content
@@ -188,7 +213,7 @@ def test_format_transcript_tail_gap_warning():
         source_filename="tail.mp3",
         model_name="medium",
         device_info="CPU",
-        language_mode="forced",
+        language_mode=LANGUAGE_FORCED,
         transcription_date=datetime(2026, 1, 1, 0, 0, 0),
     )
 
@@ -210,7 +235,7 @@ def test_format_transcript_no_tail_gap_warning_for_small_gap():
         source_filename="ok.mp3",
         model_name="medium",
         device_info="CPU",
-        language_mode="forced",
+        language_mode=LANGUAGE_FORCED,
         transcription_date=datetime(2026, 1, 1, 0, 0, 0),
     )
 
@@ -231,7 +256,7 @@ def test_format_transcript_no_tail_gap_warning_for_exact_threshold():
         source_filename="ok.mp3",
         model_name="medium",
         device_info="CPU",
-        language_mode="forced",
+        language_mode=LANGUAGE_FORCED,
         transcription_date=datetime(2026, 1, 1, 0, 0, 0),
     )
 
@@ -257,7 +282,7 @@ def test_format_transcript_repetition_warning():
         source_filename="repeat.mp3",
         model_name="medium",
         device_info="CPU",
-        language_mode="forced",
+        language_mode=LANGUAGE_FORCED,
         transcription_date=datetime(2026, 1, 1, 0, 0, 0),
     )
 
@@ -284,7 +309,7 @@ def test_format_transcript_repetition_warning_uses_hours():
         source_filename="long-repeat.mp3",
         model_name="medium",
         device_info="CPU",
-        language_mode="forced",
+        language_mode=LANGUAGE_FORCED,
         transcription_date=datetime(2026, 1, 1, 0, 0, 0),
     )
 
@@ -305,7 +330,7 @@ def test_format_transcript_without_anomalies_has_no_warning_lines():
         source_filename="ok.mp3",
         model_name="medium",
         device_info="CPU",
-        language_mode="forced",
+        language_mode=LANGUAGE_FORCED,
         transcription_date=datetime(2026, 1, 1, 0, 0, 0),
     )
 

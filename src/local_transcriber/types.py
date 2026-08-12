@@ -4,6 +4,9 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+# Единый признак «язык неизвестен» для всех бэкендов
+UNKNOWN_LANGUAGE = "unknown"
+
 
 @dataclass
 class Segment:
@@ -15,10 +18,10 @@ class Segment:
 @dataclass
 class TranscribeResult:
     segments: list[Segment]
-    language: str
+    language: str  # код языка или UNKNOWN_LANGUAGE, если он неизвестен
     language_probability: float
     duration: float  # seconds
-    device_used: str  # "cpu" / "cuda" / "openvino-gpu" / "openvino-cpu"
+    device_used: str  # "cpu" / "cuda" / "onnx" / "openvino-gpu" / "openvino-cpu"
 
 
 @dataclass

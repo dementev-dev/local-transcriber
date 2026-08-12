@@ -11,10 +11,19 @@ from local_transcriber.backends.openvino import (
     OpenVINOBackend,
     _validate_model_dir,
 )
-from local_transcriber.types import Segment
+from local_transcriber.types import UNKNOWN_LANGUAGE, Segment
 
 
 # === _resolve_repo ===
+
+
+def test_model_catalog_contains_large_v3_turbo_profiles():
+    assert {
+        pair: repo for pair, repo in MODEL_REPOS.items() if pair[0] == "large-v3-turbo"
+    } == {
+        ("large-v3-turbo", "int8"): "OpenVINO/whisper-large-v3-turbo-int8-ov",
+        ("large-v3-turbo", "fp16"): "OpenVINO/whisper-large-v3-turbo-fp16-ov",
+    }
 
 
 def test_resolve_repo_exact_match():
@@ -47,17 +56,46 @@ def test_resolve_repo_implicit_fallback():
     assert backend._resolve_repo("base", "int8") == ("OpenVINO/whisper-base-fp16-ov", "fp16")
 
 
-def test_resolve_repo_implicit_large_v3_prefers_fp16():
-    """Неявный compute_type: large-v3 автоматически получает fp16."""
+@pytest.mark.parametrize(
+    ("model_name", "expected_compute_type"),
+    [("large-v3", "fp16"), ("large-v3-turbo", "int8")],
+)
+def test_resolve_repo_implicit_large_v3_profiles(
+    model_name, expected_compute_type
+):
+    """Неявный compute_type различает обычную и turbo-модель."""
     backend = OpenVINOBackend(compute_type_explicit=False)
-    # Дефолт int8, но для large-v3 override на fp16
-    assert backend._resolve_repo("large-v3", "int8") == ("OpenVINO/whisper-large-v3-fp16-ov", "fp16")
+
+    assert backend._resolve_repo(model_name, "int8") == (
+        f"OpenVINO/whisper-{model_name}-{expected_compute_type}-ov",
+        expected_compute_type,
+    )
 
 
 def test_resolve_repo_explicit_large_v3_int8_respected():
     """Явный --compute-type int8 для large-v3 → уважается."""
     backend = OpenVINOBackend(compute_type_explicit=True)
     assert backend._resolve_repo("large-v3", "int8") == ("OpenVINO/whisper-large-v3-int8-ov", "int8")
+
+
+@pytest.mark.parametrize("compute_type", ["int8", "fp16"])
+def test_resolve_repo_large_v3_turbo_quantization(compute_type):
+    backend = OpenVINOBackend(compute_type_explicit=True)
+
+    assert backend._resolve_repo("large-v3-turbo", compute_type) == (
+        f"OpenVINO/whisper-large-v3-turbo-{compute_type}-ov",
+        compute_type,
+    )
+
+
+def test_resolve_repo_large_v3_turbo_unsupported_quantization_raises():
+    backend = OpenVINOBackend(compute_type_explicit=True)
+
+    with pytest.raises(
+        ValueError,
+        match="Доступные варианты: fp16, int8",
+    ):
+        backend._resolve_repo("large-v3-turbo", "float32")
 
 
 # === ensure_model_available ===
@@ -99,6 +137,27 @@ def test_ensure_model_available_downloads(mock_download, tmp_path):
 
     assert result == str(model_dir)
     assert any("Скачиваю" in s for s in statuses)
+
+
+@patch("local_transcriber.backends.openvino.snapshot_download")
+def test_large_v3_turbo_model_is_resolved_and_created(mock_download, tmp_path):
+    model_dir = tmp_path / "large-v3-turbo"
+    model_dir.mkdir()
+    (model_dir / "openvino_encoder_model.xml").write_text("<xml/>")
+    (model_dir / "openvino_decoder_model.xml").write_text("<xml/>")
+    mock_download.return_value = str(model_dir)
+    mock_ov = MagicMock()
+
+    backend = OpenVINOBackend(ov_device="openvino-cpu", compute_type_explicit=True)
+    model_path = backend.ensure_model_available("large-v3-turbo", "int8")
+    with patch.dict("sys.modules", {"openvino_genai": mock_ov}):
+        backend.create_model(model_path, "openvino-cpu", "int8")
+
+    mock_download.assert_called_once_with(
+        "OpenVINO/whisper-large-v3-turbo-int8-ov",
+        local_files_only=True,
+    )
+    mock_ov.WhisperPipeline.assert_called_once_with(str(model_dir), "CPU")
 
 
 # === create_model ===
@@ -242,7 +301,7 @@ def test_transcribe_no_language_auto():
 
     call_kwargs = mock_model.generate.call_args.kwargs
     assert "language" not in call_kwargs
-    assert result.language == "auto"
+    assert result.language == UNKNOWN_LANGUAGE
     assert result.language_probability == 0.0
 
 

@@ -10,6 +10,19 @@ from .types import Segment, TranscribeResult
 _PAUSE_THRESHOLD_S = 2.0  # пауза между сегментами для разбиения на абзацы
 _MAX_PARAGRAPH_S = 60.0  # максимальная длительность абзаца
 
+# Источник языка в шапке транскрипта
+LANGUAGE_FORCED = "задан явно"
+LANGUAGE_DETECTED = "определён автоматически"
+LANGUAGE_FROM_MODEL = "из профиля модели"
+LANGUAGE_UNKNOWN = "не определён"
+
+LANGUAGE_MODES = (
+    LANGUAGE_FORCED,
+    LANGUAGE_DETECTED,
+    LANGUAGE_FROM_MODEL,
+    LANGUAGE_UNKNOWN,
+)
+
 
 @dataclass
 class _Paragraph:
@@ -80,7 +93,7 @@ def format_transcript(
     source_filename: str,
     model_name: str,
     device_info: str,
-    language_mode: str,  # "detected" | "forced"
+    language_mode: str,  # см. LANGUAGE_MODES
     transcription_date: datetime | None = None,  # None -> datetime.now()
 ) -> str:
     """Собирает markdown-транскрипт: шапка с метаданными + абзацы с таймкодами."""
@@ -92,7 +105,10 @@ def format_transcript(
     lines.append("")
     lines.append(f"- **Дата транскрипции**: {date.strftime('%Y-%m-%d %H:%M:%S')}")
     lines.append(f"- **Модель**: {model_name}")
-    lines.append(f"- **Язык**: {result.language} ({language_mode})")
+    if language_mode == LANGUAGE_UNKNOWN:
+        lines.append(f"- **Язык**: {LANGUAGE_UNKNOWN}")
+    else:
+        lines.append(f"- **Язык**: {result.language} ({language_mode})")
     lines.append(f"- **Длительность**: {format_duration(result.duration)}")
     if tail_gap(result) > TAIL_GAP_WARN_S:
         last_end = result.segments[-1].end

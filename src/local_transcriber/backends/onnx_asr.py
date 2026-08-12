@@ -2,45 +2,91 @@
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from local_transcriber.types import Segment, TranscribeResult
+from local_transcriber.types import UNKNOWN_LANGUAGE, Segment, TranscribeResult
 
 
 @dataclass(frozen=True)
 class OnnxModelSpec:
-    """Имя onnx-asr и опубликованные варианты квантизации модели."""
+    """Имя onnx-asr, варианты квантизации и поддерживаемые языки."""
 
     model_id: str
     quantizations: frozenset[str | None]
+    supported_languages: frozenset[str]
 
 
 _INT8_AND_FLOAT32 = frozenset({"int8", None})
+_RUSSIAN_ONLY = frozenset({"ru"})
+_GIGAAM_MULTILINGUAL_LANGUAGES = frozenset({"ru", "en", "kk", "ky", "uz"})
+_PARAKEET_V3_LANGUAGES = frozenset(
+    {
+        "bg",
+        "hr",
+        "cs",
+        "da",
+        "nl",
+        "en",
+        "et",
+        "fi",
+        "fr",
+        "de",
+        "el",
+        "hu",
+        "it",
+        "lv",
+        "lt",
+        "mt",
+        "pl",
+        "pt",
+        "ro",
+        "sk",
+        "sl",
+        "es",
+        "sv",
+        "ru",
+        "uk",
+    }
+)
+_WHISPER_MODEL_NAMES = frozenset(
+    {"tiny", "base", "small", "medium", "large-v3", "large-v3-turbo"}
+)
+# faster-whisper не знает turbo, поэтому для cpu и cuda подсказываем medium.
+# Источник правды — MODEL_REPOS в backends/faster_whisper.py и backends/openvino.py
+_OPENVINO_ONLY_WHISPER_MODELS = frozenset({"large-v3-turbo"})
 
 MODEL_CATALOG: dict[str, OnnxModelSpec] = {
-    "gigaam-v3": OnnxModelSpec("gigaam-v3-ctc", _INT8_AND_FLOAT32),
+    "gigaam-v3": OnnxModelSpec(
+        "gigaam-v3-ctc", _INT8_AND_FLOAT32, _RUSSIAN_ONLY
+    ),
     "parakeet-v3": OnnxModelSpec(
         "nemo-parakeet-tdt-0.6b-v3",
         _INT8_AND_FLOAT32,
+        _PARAKEET_V3_LANGUAGES,
     ),
     "gigaam-multilingual-ctc": OnnxModelSpec(
         "gigaam-multilingual-ctc",
         _INT8_AND_FLOAT32,
+        _GIGAAM_MULTILINGUAL_LANGUAGES,
     ),
     "gigaam-multilingual-large-ctc": OnnxModelSpec(
         "gigaam-multilingual-large-ctc",
         _INT8_AND_FLOAT32,
+        _GIGAAM_MULTILINGUAL_LANGUAGES,
     ),
     "gigaam-v3-e2e-ctc": OnnxModelSpec(
         "gigaam-v3-e2e-ctc",
         _INT8_AND_FLOAT32,
+        _RUSSIAN_ONLY,
     ),
     "gigaam-v3-e2e-rnnt": OnnxModelSpec(
         "gigaam-v3-e2e-rnnt",
         _INT8_AND_FLOAT32,
+        _RUSSIAN_ONLY,
     ),
 }
 
@@ -85,6 +131,8 @@ class OnnxAsrBackend:
         self._compute_type_explicit = compute_type_explicit
         self.actual_compute_type: str | None = None
         self._resolved_model_id: str | None = None
+        self._model_name: str | None = None
+        self._model_spec: OnnxModelSpec | None = None
         self._vad: Any = None
 
     def ensure_model_available(
@@ -119,6 +167,8 @@ class OnnxAsrBackend:
 
         self.actual_compute_type = resolved_compute_type
         self._resolved_model_id = self._resolve_model(model_name)
+        self._model_name = model_name
+        self._model_spec = spec
         return self._resolved_model_id
 
     def create_model(
@@ -162,13 +212,16 @@ class OnnxAsrBackend:
         """
         from faster_whisper import decode_audio
 
+        self._warn_if_language_unsupported(language)
         _notify(on_status, "Загружаю аудио...")
         audio_array = decode_audio(str(file_path), sampling_rate=16000)
         duration = len(audio_array) / 16000.0
 
         _notify(on_status, "Транскрибирую (onnx-asr)...")
         segments: list[Segment] = []
-        detected_language = language or "unknown"
+        result_language = (
+            language or _model_language(self._model_spec) or UNKNOWN_LANGUAGE
+        )
 
         for vad_seg in model.recognize(
             audio_array, sample_rate=16000, language=language
@@ -192,7 +245,7 @@ class OnnxAsrBackend:
 
         return TranscribeResult(
             segments=segments,
-            language=detected_language,
+            language=result_language,
             language_probability=1.0 if language else 0.0,
             duration=duration,
             device_used="",  # оркестратор проставит
@@ -202,6 +255,15 @@ class OnnxAsrBackend:
         """Resolve alias to onnx-asr model name. Raw names pass through."""
         if model_name in MODEL_ALIASES:
             return MODEL_ALIASES[model_name]
+        if model_name in _WHISPER_MODEL_NAMES:
+            fallback = _whisper_fallback_model(model_name)
+            raise ValueError(
+                f"Модель '{model_name}' относится к Whisper и не поддерживается "
+                "ONNX-бэкендом. Без CUDA --device auto выбирает ONNX; "
+                f"укажите --device openvino-cpu --model {model_name} на x86, "
+                f"--device cpu --model {fallback} на любой платформе "
+                f"или --device cuda --model {fallback} при NVIDIA GPU."
+            )
         if "/" in model_name or model_name.count("-") >= 2:
             # Looks like a raw onnx-asr name — allow passthrough
             return model_name
@@ -209,6 +271,26 @@ class OnnxAsrBackend:
             f"Неподдерживаемая модель '{model_name}'. "
             f"Доступные алиасы: {SUPPORTED_ALIASES}. "
             f"Либо укажите полное имя модели onnx-asr."
+        )
+
+    def _warn_if_language_unsupported(self, language: str | None) -> None:
+        if (
+            language is None
+            or self._model_spec is None
+            or language in self._model_spec.supported_languages
+        ):
+            return
+
+        supported = ", ".join(sorted(self._model_spec.supported_languages))
+        warnings.warn(
+            f"Язык '{language}' не поддерживается моделью '{self._model_name}' "
+            f"(поддерживаются: {supported}). Результат может быть некорректным. "
+            "Для других языков возьмите Whisper: "
+            "--device openvino-cpu --model medium на x86, "
+            "--device cpu --model medium на любой платформе "
+            "или --device cuda --model medium при NVIDIA GPU.",
+            UserWarning,
+            stacklevel=2,
         )
 
 
@@ -226,6 +308,19 @@ def _preferred_compute_type(quantizations: frozenset[str | None]) -> str:
         if quantization in quantizations:
             return _compute_type_for_quantization(quantization)
     raise ValueError("Для ONNX-модели не указаны доступные квантизации")
+
+
+def _whisper_fallback_model(model_name: str) -> str:
+    """Модель для подсказки про faster-whisper: turbo там недоступен."""
+    if model_name in _OPENVINO_ONLY_WHISPER_MODELS:
+        return "medium"
+    return model_name
+
+
+def _model_language(spec: OnnxModelSpec | None) -> str | None:
+    if spec is not None and len(spec.supported_languages) == 1:
+        return next(iter(spec.supported_languages))
+    return None
 
 
 def _notify(on_status: Callable[[str], None] | None, message: str) -> None:

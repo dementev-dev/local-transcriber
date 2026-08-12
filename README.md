@@ -8,7 +8,7 @@ transcribe meeting.mp4
 ```
 
 - **Полностью локально** — данные не покидают машину
-- **Авто-ускорение** — NVIDIA CUDA, Intel GPU (OpenVINO), ONNX (CPU), OpenVINO CPU или CPU fallback
+- **Авто-ускорение** — NVIDIA CUDA при наличии GPU, иначе ONNX на CPU
 - **Батч-режим** — обработка нескольких файлов за один вызов
 - **Из проводника Windows** — пункт Transcribe в меню «Отправить» ([установка](#контекстное-меню-проводника-windows))
 - **Markdown с таймкодами** — удобен для суммаризации ИИ
@@ -33,18 +33,24 @@ uv tool install git+https://github.com/dementev-dev/local-transcriber
 
 **3. Ускорение (ставится автоматически):**
 
-- **Intel GPU** (Arc, встроенная графика): работает через OpenVINO — ускорение в ~2x vs CPU
-- **OpenVINO** (Intel/AMD x86 CPU): ставится автоматически на Linux и Windows — ускорение в 2-4x
 - **NVIDIA CUDA** (GPU): если есть GPU — транскрипция в 5-10× быстрее
   - **Windows**: `winget install -e --id Nvidia.CUDA --version 12.9` (от администратора), перезапустить терминал
   - **Linux / WSL2**: работает из коробки (нужен только драйвер: `nvidia-smi`)
+- **Без NVIDIA GPU**: автоматически используется ONNX с GigaAM RNN-T на CPU.
+  Эта модель понимает только русскую речь
+- **Другие языки без NVIDIA**: выбирайте Whisper явно —
+  `--device openvino-cpu --model medium` на x86 или `--device cpu --model medium`
+  на любой платформе
+- **OpenVINO** для Intel GPU или x86 CPU остаётся доступен через явный
+  `--device openvino`, `--device openvino-gpu` или `--device openvino-cpu`
 
 **4. Готово:**
 
 ```bash
 transcribe meeting.mp4
 ```
-Модели скачиваются автоматически при первом запуске (~1.5 GB для medium), нужен доступ в интернет.
+Модели скачиваются автоматически при первом запуске; размер зависит от выбранного
+профиля, нужен доступ в интернет.
 
 <details>
 <summary><code>transcribe: command not found</code></summary>
@@ -103,7 +109,7 @@ HuggingFace Hub использует симлинки для экономии м
 ## Использование
 
 ```bash
-# Простой запуск (medium, русский, автодетект устройства)
+# Простой запуск (CUDA medium или ONNX GigaAM RNN-T, язык ru)
 transcribe meeting.mp4
 
 # Указать язык
@@ -180,11 +186,11 @@ transcribe --uninstall-menu
 
 | Опция | Сокращение | По умолчанию | Описание |
 |-------|-----------|-------------|----------|
-| `--model` | `-m` | `medium` | Модель Whisper |
-| `--language` | `-l` | `ru` | Язык (ru, en, auto и др.) |
+| `--model` | `-m` | medium (CUDA) / gigaam-v3-e2e-rnnt (ONNX) | Модель распознавания |
+| `--language` | `-l` | `ru` | Язык (ru, en, auto и др.); автоматический профиль без NVIDIA понимает только русский |
 | `--output` | `-o` | `<файл>-transcript.md` | Путь к выходному файлу |
 | `--device` | `-d` | `auto` | Устройство (auto, cpu, cuda, openvino, openvino-gpu, openvino-cpu, onnx) |
-| `--compute-type` | — | float16 (CUDA) / int8 (OpenVINO/ONNX) / float32 (CPU) | Тип вычислений |
+| `--compute-type` | — | float16 (CUDA) / int8 (ONNX/OpenVINO) / float32 (CPU) | Тип вычислений |
 | `--threads` | `-t` | 0 (авто) | Потоки CPU (рекомендуется = число физ. ядер) |
 | `--force` | `-f` | — | Перезаписать существующие транскрипты |
 | `--verbose` | `-v` | — | Подробный вывод |
@@ -193,11 +199,13 @@ transcribe --uninstall-menu
 
 |  | Linux / WSL2 | macOS | Windows |
 |---|---|---|---|
-| CPU | ✅ | ✅ | ✅ |
-| OpenVINO (x86 CPU) | ✅ авто | — | ✅ авто |
-| OpenVINO (Intel GPU) | ✅ авто | — | ✅ авто |
-| ONNX (CPU) | ✅ явно | ✅ явно | ✅ явно |
+| CPU через ONNX | ✅ авто | ✅ авто | ✅ авто |
+| OpenVINO (x86 CPU) | ✅ явно | — | ✅ явно |
+| OpenVINO (Intel GPU) | ✅ явно | — | ✅ явно |
 | GPU (NVIDIA) | ✅ авто | — | ✅ (нужен CUDA 12) |
+
+Данные по macOS основаны на доступности пакетов onnxruntime: прогонов на этой
+платформе не было.
 
 <details>
 <summary>Linux / WSL2</summary>
@@ -237,8 +245,10 @@ transcribe --uninstall-menu
 Дефолтные параметры можно задать в `.transcriber.toml`:
 
 ```toml
-model = "large-v3"
-language = "en"
+device = "openvino-cpu"
+model = "large-v3-turbo"
+compute_type = "int8"
+language = "ru"
 ```
 
 Порядок поиска:
@@ -246,6 +256,13 @@ language = "en"
 2. `~/.config/transcriber/config.toml`
 
 Приоритет: **CLI-аргумент > конфиг > device-aware дефолт > встроенный дефолт**.
+
+При `device = "auto"` выбирается CUDA, если доступен `nvidia-smi`, иначе ONNX.
+Явный `device` из CLI или конфига отключает этот автоматический выбор.
+Каталоги моделей различаются между бэкендами, поэтому при закреплении `model`
+в конфиге рекомендуется явно закрепить и совместимый `device`. То же с языком:
+автоматический ONNX-профиль рассчитан на русскую речь, а для остальных языков
+нужен Whisper — например, `device = "openvino-cpu"` и `model = "medium"`.
 
 Дефолты зависят от устройства:
 
@@ -258,16 +275,19 @@ language = "en"
 ## Модели и GPU
 
 Рекомендации:
-- **По умолчанию для ONNX:** `gigaam-v3-e2e-rnnt` — читаемый русский текст с
+- **По умолчанию без CUDA:** ONNX `gigaam-v3-e2e-rnnt` — читаемый русский текст с
   пунктуацией почти без потери скорости относительно сырого `gigaam-v3`
 - **Макс. качество (NVIDIA):** `large-v3` + `--compute-type float16`
 - **Макс. качество (Intel GPU):** `large-v3` + `--device openvino-gpu`
 - **Макс. скорость CPU (русский):** `--device onnx --model gigaam-v3` (17-29× RTF, без пунктуации; рекомендуется LLM-нормализация терминов после)
-- **CPU с пунктуацией (русский):** `--device openvino-cpu --model medium` (5-6× RTF; для встреч ≤30 мин с равномерной громкостью — на длинных файлах с тихими фрагментами возможны галлюцинации)
+- **Быстрый OpenVINO с низким WER:** `--device openvino-cpu --model large-v3-turbo --compute-type int8` (7,2× RTFx на контрольном Intel CPU; пунктуация может быть слабой)
+- **OpenVINO для чтения и конспекта:** `--device openvino-cpu --model medium` (около 6× RTFx; независимая оценка показала лучшую сохранность содержания, чем turbo)
 - **Быстрый тест:** `tiny` — для проверки пайплайна
 
 <details>
 <summary>Таблица моделей</summary>
+
+#### Whisper через faster-whisper (`--device cuda`, `--device cpu`)
 
 | Модель | Размер на диске | VRAM (int8) | Скорость (GPU) | Качество |
 |--------|----------------|-------------|----------------|----------|
@@ -276,6 +296,15 @@ language = "en"
 | `small` | ~460 MB | ~1.5 GB | ★★★ | ★★★ |
 | `medium` | ~1.5 GB | ~2.5 GB | ★★ | ★★★★ |
 | `large-v3` | ~3 GB | ~2.5 GB | ★ | ★★★★★ |
+
+#### Whisper через OpenVINO (`--device openvino-cpu`, `--device openvino-gpu`)
+
+Здесь те же модели Whisper, но предквантизированные, поэтому на диске они
+занимают меньше места: `medium` int8 — 748 MB, `large-v3-turbo` int8 — 790 MB,
+`large-v3-turbo` fp16 — 1552 MB. Модель `large-v3-turbo` доступна только здесь:
+faster-whisper её не поддерживает, и запуск с `--device cuda` завершится
+ошибкой. Полный список репозиториев —
+[docs/gpu.md](docs/gpu.md#доступные-openvino-модели).
 
 #### ONNX-модели (`--device onnx`)
 
@@ -308,6 +337,9 @@ language = "en"
 кыргызский и узбекский внутри одной записи. `onnx-asr` не передаёт этим моделям
 подсказку языка, поэтому `--language` не управляет выбором языка.
 
+Если модель не понимает запрошенный язык, CLI предупреждает об этом до начала
+распознавания и подсказывает совместимый профиль, но работу не прерывает.
+
 Для моделей из таблицы опубликованы `int8` и `float32`. Если неявный
 device-aware дефолт недоступен для выбранной модели, CLI сообщит о подстановке
 доступного варианта. Явное значение из `--compute-type` или
@@ -331,11 +363,15 @@ device-aware дефолт недоступен для выбранной мод�
 `float16`/`fp16` и `float32` значительно стабильнее на записях >20 минут.
 
 > Для OpenVINO `--compute-type` выбирает предквантизированную модель (int8 или fp16),
-> а не runtime-параметр. Для `large-v3` по умолчанию выбирается `fp16`.
+> а не параметр времени выполнения. Для `large-v3` по умолчанию выбирается
+> `fp16`; для `large-v3-turbo` доступны явные варианты `int8` и `fp16`, а
+> неявный профиль OpenVINO использует `int8`.
 
 </details>
 
-Подробнее: бенчмарки, OpenVINO, совместимость GPU, результаты тестирования — [docs/gpu.md](docs/gpu.md).
+Подробнее: бенчмарки, OpenVINO, совместимость GPU, результаты тестирования —
+[docs/gpu.md](docs/gpu.md). Сравнение `large-v3-turbo` с CPU-профилями:
+[OpenVINO 2026.3 и large-v3-turbo](docs/benchmarks/2026-08-12-openvino-large-v3-turbo-comparison.md).
 
 <details>
 <summary>Формат вывода</summary>
@@ -345,7 +381,7 @@ device-aware дефолт недоступен для выбранной мод�
 
 - **Дата транскрипции**: 2026-03-17 14:30:05
 - **Модель**: large-v3
-- **Язык**: ru (detected)
+- **Язык**: ru (задан явно)
 - **Длительность**: 01:23:45
 - **Устройство**: CUDA (NVIDIA GeForce RTX 3060)
 
@@ -359,6 +395,14 @@ device-aware дефолт недоступен для выбранной мод�
 
 Близкие по времени сегменты автоматически объединяются в абзацы (пауза > 2 сек или длительность > 60 сек разделяет абзацы).
 Таймкоды: `MM:SS.ss`, для записей длиннее 1 часа — `HH:MM:SS.ss`.
+
+В скобках после языка указан его источник:
+
+- `задан явно` — язык взят из `--language` или конфига;
+- `определён автоматически` — распознан моделью при `--language auto`;
+- `из профиля модели` — у модели всего один язык, как у GigaAM.
+
+Если язык определить не удалось, строка выглядит так: `- **Язык**: не определён`.
 
 </details>
 

@@ -12,6 +12,10 @@ from .config import apply_device_defaults, load_config, resolve_defaults
 from .context_menu import install_menu as install_context_menu
 from .context_menu import uninstall_menu as uninstall_context_menu
 from .formatter import (
+    LANGUAGE_DETECTED,
+    LANGUAGE_FORCED,
+    LANGUAGE_FROM_MODEL,
+    LANGUAGE_UNKNOWN,
     format_duration,
     format_timestamp,
     format_transcript,
@@ -30,6 +34,7 @@ from .transcriber import (
     _transcribe_file,
     load_model,
 )
+from .types import UNKNOWN_LANGUAGE
 from .utils import (
     build_output_path,
     detect_device,
@@ -55,6 +60,19 @@ def _format_device_info(device_used: str) -> str:
     if device_used in ("openvino", "openvino-cpu"):
         return "OpenVINO (CPU)"
     return "CPU"
+
+
+def _format_language_mode(
+    requested_language: str, result: TranscribeResult
+) -> str:
+    """Описывает источник языка, не выдавая профиль модели за детектор."""
+    if requested_language != "auto":
+        return LANGUAGE_FORCED
+    if result.language_probability > 0:
+        return LANGUAGE_DETECTED
+    if result.language not in {"", UNKNOWN_LANGUAGE}:
+        return LANGUAGE_FROM_MODEL
+    return LANGUAGE_UNKNOWN
 
 
 def _format_repetition_blocks(
@@ -114,7 +132,11 @@ def _print_quality_warnings(result: TranscribeResult, file_name: str | None = No
 def main(
     files: list[Path] | None = typer.Argument(None, help="Пути к аудио/видеофайлам"),
     model: str | None = typer.Option(
-        None, "--model", "-m", show_default=False, help="Модель Whisper [по умолч.: medium]"
+        None,
+        "--model",
+        "-m",
+        show_default=False,
+        help="Модель [по умолч.: medium (CUDA) / gigaam-v3-e2e-rnnt (ONNX)]",
     ),
     language: str | None = typer.Option(
         None, "--language", "-l", show_default=False, help="Язык [по умолч.: ru]"
@@ -126,7 +148,10 @@ def main(
     ),
     compute_type: str | None = typer.Option(
         None, "--compute-type", show_default=False,
-        help="Тип вычислений [по умолч.: float16 (CUDA) / int8 (OpenVINO GPU/CPU) / float32 (CPU)]"
+        help=(
+            "Тип вычислений [по умолч.: float16 (CUDA) / "
+            "int8 (ONNX/OpenVINO) / float32 (CPU)]"
+        ),
     ),
     threads: int = typer.Option(
         0, "--threads", "-t", show_default=False, min=0,
@@ -308,7 +333,7 @@ def _run_single(
         )
 
     device_info = _format_device_info(result.device_used)
-    language_mode = "detected" if defaults["language"] == "auto" else "forced"
+    language_mode = _format_language_mode(defaults["language"], result)
 
     content = format_transcript(
         result=result,
@@ -394,8 +419,6 @@ def _run_batch(
     # Phase 3: Transcribe
     processed = 0
     failed = 0
-    language_mode = "detected" if defaults["language"] == "auto" else "forced"
-
     batch_start = time.monotonic()
 
     for i, file in enumerate(to_process, 1):
@@ -435,6 +458,7 @@ def _run_batch(
             model_path = tfr.model_path
 
             result = tfr.result
+            language_mode = _format_language_mode(defaults["language"], result)
 
             if len(result.segments) == 0:
                 console.print(

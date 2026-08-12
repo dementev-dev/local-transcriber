@@ -2,11 +2,11 @@
 
 ## Режимы `--device`
 
-- `auto` (по умолчанию) — CUDA → OpenVINO GPU → OpenVINO CPU → CPU (первый доступный)
+- `auto` (по умолчанию) — CUDA при наличии `nvidia-smi`, иначе ONNX на CPU
 - `cuda` — строго NVIDIA GPU, ошибка если недоступен
 - `openvino` — авто-выбор OpenVINO GPU или CPU
 - `openvino-gpu` — строго Intel GPU через OpenVINO
-- `openvino-cpu` — строго CPU через OpenVINO (ускорение 2-4x на x86)
+- `openvino-cpu` — строго CPU через OpenVINO (3-10x на x86, зависит от модели)
 - `cpu` — строго CPU (faster-whisper/CTranslate2)
 
 ## Какой бэкенд на каком оборудовании
@@ -14,12 +14,17 @@
 | Оборудование | Рекомендуемый `--device` | Бэкенд | Ожидаемая скорость |
 |---|---|---|---|
 | NVIDIA GPU (6+ GB VRAM) | `auto` / `cuda` | faster-whisper (CTranslate2) | 7-19x реалтайм |
-| Intel Arc iGPU / dGPU | `auto` / `openvino-gpu` | OpenVINO GenAI (GPU) | TBD |
-| Intel/AMD x86 CPU | `auto` / `openvino-cpu` | OpenVINO GenAI (CPU) | 3-6x реалтайм* |
-| Любой CPU (fallback) | `cpu` | faster-whisper (CTranslate2) | ~1.5x реалтайм |
-| Apple Silicon (macOS) | `cpu` | faster-whisper (CTranslate2) | ~2x реалтайм |
+| Любой CPU без NVIDIA | `auto` / `onnx` | ONNX GigaAM RNN-T | 10-14x реалтайм* |
+| Intel Arc iGPU / dGPU | `openvino-gpu` | OpenVINO GenAI (GPU) | TBD |
+| Intel/AMD x86 CPU | `openvino-cpu` | OpenVINO GenAI (CPU) | 3-10x реалтайм* |
+| Любой CPU, FasterWhisper | `cpu` | faster-whisper (CTranslate2) | ~1.5x реалтайм |
 
-\* По результатам тестирования на Intel и AMD CPU. Реальная скорость зависит от CPU и модели.
+\* По результатам контрольных прогонов на Intel и AMD CPU. Реальная скорость
+зависит от CPU, модели и записи.
+
+Автоматический профиль без NVIDIA рассчитан на русскую речь: GigaAM других
+языков не понимает. Для них берите Whisper — `openvino-cpu` на x86 или `cpu`
+на любой платформе.
 
 ## OpenVINO
 
@@ -28,6 +33,8 @@ OpenVINO ускоряет inference на x86 процессорах (Intel и AM
 
 - **Модели**: предконвертированные из [HuggingFace](https://huggingface.co/OpenVINO) (int8/fp16)
 - **Дефолт**: `medium` + `int8` (для `large-v3` автоматически выбирается `fp16`)
+- **Быстрый профиль с низким WER**: явный `large-v3-turbo` + `int8`; для
+  читаемости и сохранности содержания `medium` остаётся предпочтительнее
 - **Аудиодекодирование**: через PyAV (бандлит FFmpeg), системный ffmpeg не нужен
 
 ### Доступные OpenVINO модели
@@ -39,8 +46,22 @@ OpenVINO ускоряет inference на x86 процессорах (Intel и AM
 | small | OpenVINO/whisper-small-int8-ov | — |
 | medium | OpenVINO/whisper-medium-int8-ov | OpenVINO/whisper-medium-fp16-ov |
 | large-v3 | OpenVINO/whisper-large-v3-int8-ov | OpenVINO/whisper-large-v3-fp16-ov |
+| large-v3-turbo | OpenVINO/whisper-large-v3-turbo-int8-ov | OpenVINO/whisper-large-v3-turbo-fp16-ov |
+
+Размер в кеше HuggingFace: `medium` int8 — 748 MB, `large-v3-turbo` int8 —
+790 MB, `large-v3-turbo` fp16 — 1552 MB. Это меньше, чем у тех же моделей для
+faster-whisper, потому что веса уже квантизированы.
+
+Модель `large-v3-turbo` доступна только в OpenVINO: для `--device cuda` и
+`--device cpu` каталог faster-whisper заканчивается на `large-v3`.
 
 ### Результаты тестирования OpenVINO
+
+Актуальное сравнение OpenVINO 2026.3 на трёх русскоязычных встречах:
+[medium, large-v3-turbo и GigaAM](benchmarks/2026-08-12-openvino-large-v3-turbo-comparison.md).
+На Intel Core i7-11800H `large-v3-turbo` INT8 обработал 43:37 аудио за
+365,5 секунды (7,16× RTFx) при WER 24,0%. FP16 занял 545,0 секунды и получил
+WER 24,8%, поэтому для CPU рекомендуется INT8.
 
 Реальные записи рабочих созвонов (русский, техтермины: SQL, PostgreSQL, LDAP, DLP и др.).
 
@@ -76,6 +97,10 @@ OpenVINO ускоряет inference на x86 процессорах (Intel и AM
 - **small** — для быстрого сканирования большого объёма видео по маске (`*.mp4`). Ошибки в отдельных словах; для обработки ИИ (МОМ, конспект) рискованно — "рецензия" вместо "лицензия" может исказить смысл.
 - **medium** — для повседневного использования и обработки ИИ. Ключевые термины верные, единичные ляпы не влияют на смысл конспекта. Оптимальный баланс скорости и качества.
 - **large-v3** — для важных записей, где нужна дословная точность. Лучшая пунктуация и связность. На OpenVINO (416с) быстрее, чем medium на чистом CPU (734с) — лучшее качество при выше скорости.
+- **large-v3-turbo** — явный профиль для CPU с приоритетом скорости и низкого
+  WER. В проверенном наборе INT8 быстрее и численно точнее medium, но хуже по
+  независимой оценке читаемости и сохранности содержания; FP16 на CPU пользы
+  не показал.
 
 ## CPU бэкенд (CTranslate2 / faster-whisper)
 

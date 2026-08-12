@@ -12,7 +12,7 @@ from typing import Any
 from huggingface_hub import snapshot_download
 from huggingface_hub.errors import LocalEntryNotFoundError
 
-from local_transcriber.types import Segment, TranscribeResult
+from local_transcriber.types import UNKNOWN_LANGUAGE, Segment, TranscribeResult
 
 # (model_alias, compute_type) → HF repo
 MODEL_REPOS: dict[tuple[str, str], str] = {
@@ -23,6 +23,8 @@ MODEL_REPOS: dict[tuple[str, str], str] = {
     ("medium", "fp16"): "OpenVINO/whisper-medium-fp16-ov",
     ("large-v3", "int8"): "OpenVINO/whisper-large-v3-int8-ov",
     ("large-v3", "fp16"): "OpenVINO/whisper-large-v3-fp16-ov",
+    ("large-v3-turbo", "int8"): "OpenVINO/whisper-large-v3-turbo-int8-ov",
+    ("large-v3-turbo", "fp16"): "OpenVINO/whisper-large-v3-turbo-fp16-ov",
 }
 
 # Fallback: если точная пара не найдена, пробуем альтернативный compute_type
@@ -157,7 +159,7 @@ class OpenVINOBackend:
                     f"Транскрибирую (OpenVINO)... [{len(segments)} сегм.]",
                 )
 
-        detected_language = language or "auto"
+        detected_language = language or UNKNOWN_LANGUAGE
         language_probability = 1.0 if language else 0.0
 
         return TranscribeResult(

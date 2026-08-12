@@ -16,18 +16,16 @@ SUPPORTED_EXTENSIONS = {
 def detect_device(requested: str = "auto") -> str:
     """Определяет устройство для вычислений.
 
-    При ``requested="auto"`` проверяет: CUDA → OpenVINO GPU → OpenVINO CPU → CPU.
-    ``"openvino"`` — алиас для авто-детекта внутри OpenVINO (GPU если доступен, иначе CPU).
+    При ``requested="auto"`` выбирает CUDA при наличии ``nvidia-smi``,
+    иначе ONNX на CPU.
+    ``"openvino"`` — алиас для авто-детекта внутри OpenVINO
+    (GPU если доступен, иначе CPU).
     Возвращает всегда конкретное значение (не абстрактный ``"openvino"``).
     """
     if requested == "auto":
         if shutil.which("nvidia-smi") is not None:
             return "cuda"
-        if _is_openvino_gpu_available():
-            return "openvino-gpu"
-        if _is_openvino_available():
-            return "openvino-cpu"
-        return "cpu"
+        return "onnx"
     if requested == "openvino":
         if _is_openvino_gpu_available():
             return "openvino-gpu"
