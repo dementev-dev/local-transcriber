@@ -6,7 +6,14 @@ from rich.console import Console
 from typer.testing import CliRunner
 
 from local_transcriber.cli import _format_device_info, _format_language_mode, app
+from local_transcriber.formatter import (
+    LANGUAGE_DETECTED,
+    LANGUAGE_FORCED,
+    LANGUAGE_FROM_MODEL,
+    LANGUAGE_UNKNOWN,
+)
 from local_transcriber.transcriber import Segment, TranscribeFileResult, TranscribeResult
+from local_transcriber.types import UNKNOWN_LANGUAGE
 
 runner = CliRunner()
 
@@ -45,10 +52,10 @@ def _make_tfr(result=None, model=None, actual_device="cpu", backend=None, model_
 @pytest.mark.parametrize(
     ("requested_language", "language", "probability", "expected"),
     [
-        ("ru", "ru", 1.0, "forced"),
-        ("auto", "ru", 0.95, "detected"),
-        ("auto", "ru", 0.0, "из профиля модели"),
-        ("auto", "unknown", 0.0, "не определён"),
+        ("ru", "ru", 1.0, LANGUAGE_FORCED),
+        ("auto", "ru", 0.95, LANGUAGE_DETECTED),
+        ("auto", "ru", 0.0, LANGUAGE_FROM_MODEL),
+        ("auto", UNKNOWN_LANGUAGE, 0.0, LANGUAGE_UNKNOWN),
     ],
 )
 def test_format_language_mode(

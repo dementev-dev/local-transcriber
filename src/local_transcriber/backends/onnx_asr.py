@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from local_transcriber.types import Segment, TranscribeResult
+from local_transcriber.types import UNKNOWN_LANGUAGE, Segment, TranscribeResult
 
 
 @dataclass(frozen=True)
@@ -216,7 +216,9 @@ class OnnxAsrBackend:
 
         _notify(on_status, "Транскрибирую (onnx-asr)...")
         segments: list[Segment] = []
-        result_language = language or _model_language(self._model_spec) or "unknown"
+        result_language = (
+            language or _model_language(self._model_spec) or UNKNOWN_LANGUAGE
+        )
 
         for vad_seg in model.recognize(
             audio_array, sample_rate=16000, language=language

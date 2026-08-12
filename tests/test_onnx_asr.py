@@ -5,7 +5,7 @@ import warnings
 import pytest
 
 from local_transcriber.backends.onnx_asr import OnnxAsrBackend
-from local_transcriber.types import Segment, TranscribeResult
+from local_transcriber.types import UNKNOWN_LANGUAGE, Segment, TranscribeResult
 
 
 class FakeVadSegment:
@@ -390,7 +390,7 @@ class TestTranscribe:
         result = backend.transcribe(FakeModel(), wav_file, language=None)
 
         assert len(result.segments) == 0
-        assert result.language == "unknown"
+        assert result.language == UNKNOWN_LANGUAGE
         assert result.duration == 1.0
 
     def test_transcribe_skips_zero_length_vad_segments(self, monkeypatch, tmp_path):

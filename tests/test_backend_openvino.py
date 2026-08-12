@@ -11,7 +11,7 @@ from local_transcriber.backends.openvino import (
     OpenVINOBackend,
     _validate_model_dir,
 )
-from local_transcriber.types import Segment
+from local_transcriber.types import UNKNOWN_LANGUAGE, Segment
 
 
 # === _resolve_repo ===
@@ -301,7 +301,7 @@ def test_transcribe_no_language_auto():
 
     call_kwargs = mock_model.generate.call_args.kwargs
     assert "language" not in call_kwargs
-    assert result.language == "auto"
+    assert result.language == UNKNOWN_LANGUAGE
     assert result.language_probability == 0.0
 
 

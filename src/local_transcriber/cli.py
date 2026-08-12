@@ -12,6 +12,10 @@ from .config import apply_device_defaults, load_config, resolve_defaults
 from .context_menu import install_menu as install_context_menu
 from .context_menu import uninstall_menu as uninstall_context_menu
 from .formatter import (
+    LANGUAGE_DETECTED,
+    LANGUAGE_FORCED,
+    LANGUAGE_FROM_MODEL,
+    LANGUAGE_UNKNOWN,
     format_duration,
     format_timestamp,
     format_transcript,
@@ -30,6 +34,7 @@ from .transcriber import (
     _transcribe_file,
     load_model,
 )
+from .types import UNKNOWN_LANGUAGE
 from .utils import (
     build_output_path,
     detect_device,
@@ -62,12 +67,12 @@ def _format_language_mode(
 ) -> str:
     """Описывает источник языка, не выдавая профиль модели за детектор."""
     if requested_language != "auto":
-        return "forced"
+        return LANGUAGE_FORCED
     if result.language_probability > 0:
-        return "detected"
-    if result.language not in {"", "auto", "unknown"}:
-        return "из профиля модели"
-    return "не определён"
+        return LANGUAGE_DETECTED
+    if result.language not in {"", UNKNOWN_LANGUAGE}:
+        return LANGUAGE_FROM_MODEL
+    return LANGUAGE_UNKNOWN
 
 
 def _format_repetition_blocks(
