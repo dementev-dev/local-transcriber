@@ -11,7 +11,7 @@ from local_transcriber.transcriber import (
     load_model,
     transcribe,
 )
-
+from local_transcriber.types import WordTimestampsUnavailableError
 
 # === Helpers ===
 
@@ -314,7 +314,9 @@ def test_load_model_returns_backend_and_path(mock_get_backend):
     backend = _make_backend(model_path="/mock/model/path")
     mock_get_backend.return_value = backend
 
-    model, actual_device, returned_backend, model_path = load_model("tiny", "cpu", "int8")
+    model, actual_device, returned_backend, model_path = load_model(
+        "tiny", "cpu", "int8"
+    )
 
     assert returned_backend is backend
     assert model_path == "/mock/model/path"
@@ -389,7 +391,9 @@ def test_ensure_model_available_uses_cache_first(mock_snapshot_download, tmp_pat
 
 @patch("local_transcriber.backends.faster_whisper._validate_model_dir")
 @patch("local_transcriber.backends.faster_whisper.snapshot_download")
-def test_ensure_model_available_downloads_on_cache_miss(mock_snapshot_download, mock_validate_model_dir):
+def test_ensure_model_available_downloads_on_cache_miss(
+    mock_snapshot_download, mock_validate_model_dir
+):
     from huggingface_hub.errors import LocalEntryNotFoundError
 
     mock_snapshot_download.side_effect = [
@@ -433,7 +437,9 @@ def test_ensure_model_available_rejects_unsupported_alias():
 
 
 @patch("local_transcriber.backends.faster_whisper.snapshot_download")
-def test_ensure_model_available_redownloads_incomplete_cache(mock_snapshot_download, tmp_path):
+def test_ensure_model_available_redownloads_incomplete_cache(
+    mock_snapshot_download, tmp_path
+):
     incomplete = tmp_path / "incomplete"
     incomplete.mkdir()
     (incomplete / "config.json").write_text("{}")
@@ -489,7 +495,9 @@ def test_load_model_openvino_gpu_fallback_to_cpu(mock_get_backend):
 
     with pytest.warns(UserWarning, match="Переключение на CPU"):
         model, actual_device, backend, model_path = load_model(
-            "medium", "openvino-gpu", "fp16",
+            "medium",
+            "openvino-gpu",
+            "fp16",
         )
 
     assert actual_device == "cpu"
@@ -514,7 +522,9 @@ def test_load_model_openvino_cpu_fallback_to_cpu(mock_get_backend):
 
     with pytest.warns(UserWarning, match="Переключение на CPU"):
         model, actual_device, backend, model_path = load_model(
-            "medium", "openvino-cpu", "int8",
+            "medium",
+            "openvino-cpu",
+            "int8",
         )
 
     assert actual_device == "cpu"
@@ -553,6 +563,28 @@ def test_transcribe_file_openvino_gpu_midstream_fallback(mock_get_backend):
     assert tfr.actual_device == "cpu"
     assert tfr.backend is cpu_backend
     assert tfr.model_path == "/mock/cpu/model"
+
+
+@patch("local_transcriber.transcriber.get_backend")
+def test_transcribe_file_does_not_fallback_for_missing_word_timestamps(
+    mock_get_backend,
+):
+    ov_backend = _make_backend(
+        transcribe_error=WordTimestampsUnavailableError("нет таймкодов"),
+    )
+
+    with pytest.raises(WordTimestampsUnavailableError, match="нет таймкодов"):
+        _transcribe_file(
+            model=MagicMock(),
+            actual_device="openvino-gpu",
+            backend=ov_backend,
+            model_path="/mock/ov/model",
+            file_path=Path("test.mp3"),
+            model_name="medium",
+            compute_type="fp16",
+        )
+
+    mock_get_backend.assert_not_called()
 
 
 @patch("local_transcriber.transcriber.get_backend")

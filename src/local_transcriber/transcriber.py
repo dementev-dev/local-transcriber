@@ -12,6 +12,7 @@ from local_transcriber.types import (  # noqa: F401
     Segment,
     TranscribeFileResult,
     TranscribeResult,
+    WordTimestampsUnavailableError,
 )
 
 
@@ -37,27 +38,36 @@ def load_model(
 
     try:
         _notify_status(on_status, f"Инициализирую модель на {device}...")
-        model = backend.create_model(model_path, device, compute_type, cpu_threads=cpu_threads)
+        model = backend.create_model(
+            model_path, device, compute_type, cpu_threads=cpu_threads
+        )
         # Резолвим actual_device по реальному OpenVINO device
         ov_dev = getattr(backend, "actual_ov_device", None)
         if ov_dev == "GPU" and actual_device != "openvino-gpu":
             actual_device = "openvino-gpu"
-        elif ov_dev == "CPU" and actual_device.startswith("openvino") and actual_device != "openvino-cpu":
+        elif (
+            ov_dev == "CPU"
+            and actual_device.startswith("openvino")
+            and actual_device != "openvino-cpu"
+        ):
             actual_device = "openvino-cpu"
     except (RuntimeError, ValueError) as exc:
         if device != "cpu" and _is_backend_error(exc, device):
             if strict_device:
                 raise
             warnings.warn(
-                f"Не удалось загрузить модель на {device}: {exc}. "
-                "Переключение на CPU.",
+                f"Не удалось загрузить модель на {device}: {exc}. Переключение на CPU.",
                 stacklevel=2,
             )
             actual_device = "cpu"
             backend = get_backend("cpu")
-            model_path = backend.ensure_model_available(model_name, compute_type, on_status)
+            model_path = backend.ensure_model_available(
+                model_name, compute_type, on_status
+            )
             _notify_status(on_status, "Инициализирую модель на cpu...")
-            model = backend.create_model(model_path, "cpu", compute_type, cpu_threads=cpu_threads)
+            model = backend.create_model(
+                model_path, "cpu", compute_type, cpu_threads=cpu_threads
+            )
         else:
             raise
 
@@ -96,11 +106,17 @@ def _transcribe_file(
             )
             actual_device = "cpu"
             backend = get_backend("cpu")
-            model_path = backend.ensure_model_available(model_name, compute_type, on_status)
+            model_path = backend.ensure_model_available(
+                model_name, compute_type, on_status
+            )
             _notify_status(on_status, "Инициализирую модель на cpu...")
-            model = backend.create_model(model_path, "cpu", compute_type, cpu_threads=cpu_threads)
+            model = backend.create_model(
+                model_path, "cpu", compute_type, cpu_threads=cpu_threads
+            )
             _notify_status(on_status, "Транскрибирую...")
-            result = backend.transcribe(model, file_path, lang_arg, on_segment, on_status)
+            result = backend.transcribe(
+                model, file_path, lang_arg, on_segment, on_status
+            )
             result.device_used = actual_device
         else:
             raise
@@ -127,14 +143,26 @@ def transcribe(
 ) -> TranscribeResult:
     """High-level API: загрузка модели + транскрипция за один вызов."""
     model, actual_device, backend, model_path = load_model(
-        model_name, device, compute_type, on_status, strict_device,
+        model_name,
+        device,
+        compute_type,
+        on_status,
+        strict_device,
         compute_type_explicit=True,  # Python API — caller explicitly chose compute_type
         cpu_threads=cpu_threads,
     )
     tfr = _transcribe_file(
-        model, actual_device, backend, model_path,
-        file_path, model_name, compute_type,
-        language, on_segment, on_status, strict_device,
+        model,
+        actual_device,
+        backend,
+        model_path,
+        file_path,
+        model_name,
+        compute_type,
+        language,
+        on_segment,
+        on_status,
+        strict_device,
         cpu_threads=cpu_threads,
     )
     return tfr.result
@@ -151,7 +179,9 @@ def ensure_model_available(
 
     if compute_type is None:
         device_defs = DEVICE_DEFAULTS.get(device, {})
-        compute_type = device_defs.get("compute_type", HARDCODED_DEFAULTS["compute_type"])
+        compute_type = device_defs.get(
+            "compute_type", HARDCODED_DEFAULTS["compute_type"]
+        )
         explicit = False
     else:
         explicit = True
@@ -167,6 +197,8 @@ def _is_cuda_error(exc: BaseException) -> bool:
 
 def _is_backend_error(exc: BaseException, device: str) -> bool:
     """Определяет, связана ли ошибка с конкретным бэкендом (а не с пользовательскими данными)."""
+    if isinstance(exc, WordTimestampsUnavailableError):
+        return False
     if device in ("cuda", "cpu"):
         return _is_cuda_error(exc)
     if device.startswith("openvino"):

@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import threading
 import time
-import warnings
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -12,7 +12,13 @@ from typing import Any
 from huggingface_hub import snapshot_download
 from huggingface_hub.errors import LocalEntryNotFoundError
 
-from local_transcriber.types import UNKNOWN_LANGUAGE, Segment, TranscribeResult
+from local_transcriber.types import (
+    UNKNOWN_LANGUAGE,
+    Segment,
+    TranscribeResult,
+    Word,
+    WordTimestampsUnavailableError,
+)
 
 # (model_alias, compute_type) → HF repo
 MODEL_REPOS: dict[tuple[str, str], str] = {
@@ -43,11 +49,14 @@ _IMPLICIT_COMPUTE_TYPE_OVERRIDES: dict[str, str] = {
 MODEL_REQUIRED_FILES = [
     "openvino_encoder_model.xml",
     "openvino_decoder_model.xml",
+    "generation_config.json",
 ]
 
 
 class OpenVINOBackend:
     """Бэкенд транскрипции через openvino-genai WhisperPipeline."""
+
+    word_timestamps_available = True
 
     def __init__(
         self,
@@ -82,7 +91,9 @@ class OpenVINOBackend:
         except ValueError:
             _notify(on_status, f"Кэш модели {model_name} неполный, докачиваю...")
 
-        _notify(on_status, f"Скачиваю модель {model_name} (OpenVINO) из Hugging Face...")
+        _notify(
+            on_status, f"Скачиваю модель {model_name} (OpenVINO) из Hugging Face..."
+        )
         downloaded_path = Path(snapshot_download(repo_id, local_files_only=False))
         _validate_model_dir(downloaded_path)
         return str(downloaded_path)
@@ -115,7 +126,11 @@ class OpenVINOBackend:
 
         ov_dev = self._resolve_ov_device()
         self.actual_ov_device = ov_dev
-        return ov_genai.WhisperPipeline(model_path, ov_dev)
+        return ov_genai.WhisperPipeline(
+            model_path,
+            ov_dev,
+            word_timestamps=True,
+        )
 
     def transcribe(
         self,
@@ -130,16 +145,23 @@ class OpenVINOBackend:
 
         _notify(on_status, "Загружаю аудио...")
         raw_speech = decode_audio(str(file_path), sampling_rate=16000)
+        if isinstance(raw_speech, tuple):
+            raise TypeError("Декодер неожиданно вернул раздельные стереоканалы")
         duration = len(raw_speech) / 16000.0
 
-        kwargs: dict[str, Any] = {"return_timestamps": True}
+        kwargs: dict[str, Any] = {
+            "return_timestamps": True,
+            "word_timestamps": True,
+        }
         if language:
             kwargs["language"] = f"<|{language}|>"
 
         dur_min = int(duration // 60)
         duration_str = f"{dur_min} мин" if dur_min > 0 else f"{int(duration)} сек"
         pcm_list = raw_speech.tolist()
-        result = _generate_with_progress(model, pcm_list, kwargs, duration_str, on_status)
+        result = _generate_with_progress(
+            model, pcm_list, kwargs, duration_str, on_status
+        )
 
         segments: list[Segment] = []
         if hasattr(result, "chunks") and result.chunks:
@@ -159,6 +181,16 @@ class OpenVINOBackend:
                     f"Транскрибирую (OpenVINO)... [{len(segments)} сегм.]",
                 )
 
+        words = []
+        for raw_word in getattr(result, "words", None) or []:
+            start = min(duration, max(0.0, raw_word.start_ts))
+            end = min(duration, max(start, raw_word.end_ts))
+            words.append(Word(start=start, end=end, text=raw_word.word))
+        if any(segment.text.strip() for segment in segments) and not words:
+            raise WordTimestampsUnavailableError(
+                "OpenVINO не вернул пословные таймкоды для распознанного текста"
+            )
+
         detected_language = language or UNKNOWN_LANGUAGE
         language_probability = 1.0 if language else 0.0
 
@@ -168,6 +200,7 @@ class OpenVINOBackend:
             language_probability=language_probability,
             duration=duration,
             device_used="",  # оркестратор проставит
+            words=words,
         )
 
     def _resolve_repo(self, model_name: str, compute_type: str) -> tuple[str, str]:
@@ -176,7 +209,10 @@ class OpenVINOBackend:
         Возвращает (repo_id, actual_compute_type).
         """
         # Для неявного compute_type: override для конкретных моделей
-        if not self._compute_type_explicit and model_name in _IMPLICIT_COMPUTE_TYPE_OVERRIDES:
+        if (
+            not self._compute_type_explicit
+            and model_name in _IMPLICIT_COMPUTE_TYPE_OVERRIDES
+        ):
             compute_type = _IMPLICIT_COMPUTE_TYPE_OVERRIDES[model_name]
 
         # Точное совпадение
@@ -231,7 +267,10 @@ def _generate_with_progress(
     while thread.is_alive():
         elapsed = int(time.monotonic() - start)
         elapsed_str = f"{elapsed // 60:02d}:{elapsed % 60:02d}"
-        _notify(on_status, f"Транскрибирую {duration_str} аудио (OpenVINO)... прошло {elapsed_str}")
+        _notify(
+            on_status,
+            f"Транскрибирую {duration_str} аудио (OpenVINO)... прошло {elapsed_str}",
+        )
         thread.join(timeout=1.0)
 
     if error_box[0] is not None:
@@ -250,4 +289,12 @@ def _validate_model_dir(model_dir: Path) -> None:
     if missing:
         raise ValueError(
             f"Неполная OpenVINO модель в '{model_dir}': отсутствуют {', '.join(missing)}"
+        )
+    generation_config = json.loads(
+        (model_dir / "generation_config.json").read_text(encoding="utf-8")
+    )
+    if not generation_config.get("alignment_heads"):
+        raise ValueError(
+            f"OpenVINO модель в '{model_dir}' не содержит alignment_heads "
+            "для пословных таймкодов"
         )

@@ -5,16 +5,18 @@ import warnings
 import pytest
 
 from local_transcriber.backends.onnx_asr import OnnxAsrBackend
-from local_transcriber.types import UNKNOWN_LANGUAGE, Segment, TranscribeResult
+from local_transcriber.types import UNKNOWN_LANGUAGE, Segment, TranscribeResult, Word
 
 
 class FakeVadSegment:
     """Mimics onnx-asr SegmentResult."""
 
-    def __init__(self, start, end, text):
+    def __init__(self, start, end, text, tokens=None, timestamps=None):
         self.start = start
         self.end = end
         self.text = text
+        self.tokens = [f" {text}"] if tokens is None else tokens
+        self.timestamps = [0.0] if timestamps is None else timestamps
 
 
 class TestEnsureModelAvailable:
@@ -59,6 +61,9 @@ class TestEnsureModelAvailable:
             def with_vad(self, vad):
                 return self
 
+            def with_timestamps(self):
+                return self
+
         def fake_load_model(*, model, quantization):
             quantizations.append(quantization)
             return FakeAsrAdapter()
@@ -82,19 +87,43 @@ class TestEnsureModelAvailable:
 
 
 class TestCreateModel:
+    def test_wraps_vad_model_with_timestamps(self, monkeypatch):
+        timestamped_model = object()
+
+        class FakeVadAdapter:
+            def with_timestamps(self):
+                return timestamped_model
+
+        class FakeAsrAdapter:
+            def with_vad(self, vad):
+                return FakeVadAdapter()
+
+        monkeypatch.setattr("onnx_asr.load_model", lambda **kwargs: FakeAsrAdapter())
+        monkeypatch.setattr("onnx_asr.load_vad", lambda model: object())
+
+        model = OnnxAsrBackend().create_model("gigaam-v3-e2e-rnnt", "onnx", "int8")
+
+        assert model is timestamped_model
+
     def test_calls_load_model_with_correct_args(self, monkeypatch):
         """Verify create_model passes correct args to onnx_asr.load_model."""
         calls = []
 
-        def fake_load_model(model=None, path=None, quantization=None,
-                           **kwargs):
-            calls.append({
-                "model": model, "path": path, "quantization": quantization,
-            })
+        def fake_load_model(model=None, path=None, quantization=None, **kwargs):
+            calls.append(
+                {
+                    "model": model,
+                    "path": path,
+                    "quantization": quantization,
+                }
+            )
             return FakeAsrAdapter()
 
         class FakeAsrAdapter:
             def with_vad(self, vad):
+                return self
+
+            def with_timestamps(self):
                 return self
 
         monkeypatch.setattr("onnx_asr.load_model", fake_load_model)
@@ -123,6 +152,9 @@ class TestCreateModel:
                 self._vad = vad
                 return self
 
+            def with_timestamps(self):
+                return self
+
         monkeypatch.setattr("onnx_asr.load_model", fake_load_model)
         monkeypatch.setattr("onnx_asr.load_vad", fake_load_vad)
 
@@ -141,6 +173,9 @@ class TestCreateModel:
 
         class FakeAsrAdapter:
             def with_vad(self, vad):
+                return self
+
+            def with_timestamps(self):
                 return self
 
         monkeypatch.setattr("onnx_asr.load_model", fake_load_model)
@@ -167,6 +202,9 @@ class TestCreateModel:
             def with_vad(self, vad):
                 return self
 
+            def with_timestamps(self):
+                return self
+
         monkeypatch.setattr("onnx_asr.load_model", fake_load_model)
         monkeypatch.setattr("onnx_asr.load_vad", lambda model, **kw: None)
 
@@ -187,6 +225,9 @@ class TestCreateModel:
             def with_vad(self, vad):
                 return self
 
+            def with_timestamps(self):
+                return self
+
         monkeypatch.setattr("onnx_asr.load_model", fake_load_model)
         monkeypatch.setattr("onnx_asr.load_vad", lambda model, **kw: None)
 
@@ -205,6 +246,9 @@ class TestCreateModel:
 
         class FakeAsrAdapter:
             def with_vad(self, vad):
+                return self
+
+            def with_timestamps(self):
                 return self
 
         monkeypatch.setattr("onnx_asr.load_model", fake_load_model)
@@ -298,6 +342,7 @@ class TestTranscribe:
 
         def fake_decode_audio(path, sampling_rate=16000):
             import numpy as np
+
             return np.array(audio_samples, dtype=np.float32)
 
         class FakeModel:
@@ -310,7 +355,9 @@ class TestTranscribe:
         backend = OnnxAsrBackend()
         backend.actual_compute_type = "int8"
         result = backend.transcribe(
-            FakeModel(), wav_file, language=None,
+            FakeModel(),
+            wav_file,
+            language=None,
         )
 
         assert isinstance(result, TranscribeResult)
@@ -319,6 +366,110 @@ class TestTranscribe:
         assert result.segments[1] == Segment(start=1.0, end=2.5, text="world")
         assert result.duration == 1.0  # 16000 samples / 16000 Hz
 
+    def test_transcribe_converts_vad_token_timestamps_to_global_words(
+        self, monkeypatch, tmp_path
+    ):
+        wav_file = tmp_path / "test.wav"
+        wav_file.write_bytes(b"fake audio")
+        monkeypatch.setattr(
+            "faster_whisper.decode_audio",
+            lambda path, sampling_rate=16000: [0.0] * 16_000,
+        )
+
+        timestamped_segment = FakeVadSegment(
+            10.0,
+            12.0,
+            "Привет, мир",
+            tokens=[" ", "П", "р", "и", "в", "е", "т", ",", " ", "м", "и", "р"],
+            timestamps=[0.0, 0.1, 0.1, 0.1, 0.2, 0.2, 0.3, 0.3, 0.5, 0.6, 0.6, 0.7],
+        )
+
+        class FakeModel:
+            def recognize(self, waveform, sample_rate, language=None):
+                yield timestamped_segment
+
+        result = OnnxAsrBackend().transcribe(FakeModel(), wav_file, language="ru")
+
+        assert result.words == [
+            Word(start=10.0, end=10.5, text=" Привет,"),
+            Word(start=10.5, end=12.0, text=" мир"),
+        ]
+        assert "".join(word.text for word in result.words).strip() == "Привет, мир"
+
+    def test_transcribe_rejects_nonempty_segment_without_token_timestamps(
+        self, monkeypatch, tmp_path
+    ):
+        wav_file = tmp_path / "test.wav"
+        wav_file.write_bytes(b"fake audio")
+        monkeypatch.setattr(
+            "faster_whisper.decode_audio",
+            lambda path, sampling_rate=16000: [0.0] * 16_000,
+        )
+        segment = FakeVadSegment(0.0, 1.0, "Текст")
+        segment.tokens = None
+        segment.timestamps = None
+
+        class FakeModel:
+            def recognize(self, waveform, sample_rate, language=None):
+                yield segment
+
+        with pytest.raises(RuntimeError, match="пословные таймкоды"):
+            OnnxAsrBackend().transcribe(FakeModel(), wav_file, language="ru")
+
+    def test_transcribe_keeps_words_with_equal_emission_timestamps(
+        self, monkeypatch, tmp_path
+    ):
+        wav_file = tmp_path / "test.wav"
+        wav_file.write_bytes(b"fake audio")
+        monkeypatch.setattr(
+            "faster_whisper.decode_audio",
+            lambda path, sampling_rate=16000: [0.0] * 16_000,
+        )
+        segment = FakeVadSegment(
+            10.0,
+            12.0,
+            "Да нет потом",
+            tokens=[" ", "Да", " ", "нет", " ", "потом"],
+            timestamps=[0.0, 0.0, 0.0, 0.0, 0.5, 0.5],
+        )
+
+        class FakeModel:
+            def recognize(self, waveform, sample_rate, language=None):
+                yield segment
+
+        result = OnnxAsrBackend().transcribe(FakeModel(), wav_file, language="ru")
+
+        assert [word.text for word in result.words] == [" Да", " нет", " потом"]
+        assert [(word.start, word.end) for word in result.words] == [
+            (10.0, 10.5),
+            (10.0, 10.5),
+            (10.5, 12.0),
+        ]
+        assert "".join(word.text for word in result.words).strip() == segment.text
+
+    def test_transcribe_keeps_word_clamped_to_segment_end(self, monkeypatch, tmp_path):
+        wav_file = tmp_path / "test.wav"
+        wav_file.write_bytes(b"fake audio")
+        monkeypatch.setattr(
+            "faster_whisper.decode_audio",
+            lambda path, sampling_rate=16000: [0.0] * 16_000,
+        )
+        segment = FakeVadSegment(
+            10.0,
+            12.0,
+            "Позднее",
+            tokens=[" ", "Позднее"],
+            timestamps=[2.0, 2.0],
+        )
+
+        class FakeModel:
+            def recognize(self, waveform, sample_rate, language=None):
+                yield segment
+
+        result = OnnxAsrBackend().transcribe(FakeModel(), wav_file, language="ru")
+
+        assert result.words == [Word(start=12.0, end=12.0, text=" Позднее")]
+
     def test_transcribe_calls_on_segment(self, monkeypatch, tmp_path):
         """Verify on_segment callback is invoked per segment."""
         wav_file = tmp_path / "test.wav"
@@ -326,6 +477,7 @@ class TestTranscribe:
 
         def fake_decode_audio(path, sampling_rate=16000):
             import numpy as np
+
             return np.array([0.0] * 16000, dtype=np.float32)
 
         segments_captured = []
@@ -339,7 +491,9 @@ class TestTranscribe:
 
         backend = OnnxAsrBackend()
         backend.transcribe(
-            FakeModel(), wav_file, language=None,
+            FakeModel(),
+            wav_file,
+            language=None,
             on_segment=lambda s: segments_captured.append(s),
         )
 
@@ -354,6 +508,7 @@ class TestTranscribe:
 
         def fake_decode_audio(path, sampling_rate=16000):
             import numpy as np
+
             return np.array([0.0] * 16000, dtype=np.float32)
 
         lang_received = []
@@ -377,6 +532,7 @@ class TestTranscribe:
 
         def fake_decode_audio(path, sampling_rate=16000):
             import numpy as np
+
             return np.array([0.0] * 16000, dtype=np.float32)
 
         class FakeModel:
@@ -419,6 +575,7 @@ class TestTranscribe:
 class TestBackendRegistration:
     def test_get_backend_returns_onnx_backend(self):
         from local_transcriber.backends import get_backend
+
         backend = get_backend("onnx")
         assert isinstance(backend, OnnxAsrBackend)
 

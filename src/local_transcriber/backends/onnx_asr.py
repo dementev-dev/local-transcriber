@@ -8,7 +8,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from local_transcriber.types import UNKNOWN_LANGUAGE, Segment, TranscribeResult
+from local_transcriber.types import (
+    UNKNOWN_LANGUAGE,
+    Segment,
+    TranscribeResult,
+    Word,
+    WordTimestampsUnavailableError,
+)
 
 
 @dataclass(frozen=True)
@@ -60,9 +66,7 @@ _WHISPER_MODEL_NAMES = frozenset(
 _OPENVINO_ONLY_WHISPER_MODELS = frozenset({"large-v3-turbo"})
 
 MODEL_CATALOG: dict[str, OnnxModelSpec] = {
-    "gigaam-v3": OnnxModelSpec(
-        "gigaam-v3-ctc", _INT8_AND_FLOAT32, _RUSSIAN_ONLY
-    ),
+    "gigaam-v3": OnnxModelSpec("gigaam-v3-ctc", _INT8_AND_FLOAT32, _RUSSIAN_ONLY),
     "parakeet-v3": OnnxModelSpec(
         "nemo-parakeet-tdt-0.6b-v3",
         _INT8_AND_FLOAT32,
@@ -135,6 +139,11 @@ class OnnxAsrBackend:
         self._model_spec: OnnxModelSpec | None = None
         self._vad: Any = None
 
+    @property
+    def word_timestamps_available(self) -> bool:
+        """Каталожные модели проверены; произвольный raw id отклоняется."""
+        return self._model_spec is not None
+
     def ensure_model_available(
         self,
         model_name: str,
@@ -194,7 +203,7 @@ class OnnxAsrBackend:
         )
         vad = onnx_asr.load_vad("silero")
         self._vad = vad
-        return model.with_vad(vad)
+        return model.with_vad(vad).with_timestamps()
 
     def transcribe(
         self,
@@ -215,10 +224,13 @@ class OnnxAsrBackend:
         self._warn_if_language_unsupported(language)
         _notify(on_status, "Загружаю аудио...")
         audio_array = decode_audio(str(file_path), sampling_rate=16000)
+        if isinstance(audio_array, tuple):
+            raise TypeError("Декодер неожиданно вернул раздельные стереоканалы")
         duration = len(audio_array) / 16000.0
 
         _notify(on_status, "Транскрибирую (onnx-asr)...")
         segments: list[Segment] = []
+        words: list[Word] = []
         result_language = (
             language or _model_language(self._model_spec) or UNKNOWN_LANGUAGE
         )
@@ -235,6 +247,12 @@ class OnnxAsrBackend:
                 end=end,
                 text=vad_seg.text,
             )
+            segment_words = _timestamped_segment_words(vad_seg, start, end)
+            if vad_seg.text.strip() and not segment_words:
+                raise WordTimestampsUnavailableError(
+                    "ONNX-ASR не вернул пословные таймкоды для распознанного текста"
+                )
+            words.extend(segment_words)
             if on_segment is not None:
                 on_segment(seg)
             segments.append(seg)
@@ -249,6 +267,7 @@ class OnnxAsrBackend:
             language_probability=1.0 if language else 0.0,
             duration=duration,
             device_used="",  # оркестратор проставит
+            words=words,
         )
 
     def _resolve_model(self, model_name: str) -> str:
@@ -326,3 +345,48 @@ def _model_language(spec: OnnxModelSpec | None) -> str | None:
 def _notify(on_status: Callable[[str], None] | None, message: str) -> None:
     if on_status is not None:
         on_status(message)
+
+
+def _timestamped_segment_words(
+    vad_segment: Any,
+    segment_start: float,
+    segment_end: float,
+) -> list[Word]:
+    tokens = getattr(vad_segment, "tokens", None)
+    timestamps = getattr(vad_segment, "timestamps", None)
+    if not tokens or not timestamps or len(tokens) != len(timestamps):
+        return []
+
+    grouped: list[tuple[float, str]] = []
+    current_start = float(timestamps[0])
+    current_tokens: list[str] = []
+    for token, timestamp in zip(tokens, timestamps, strict=True):
+        if token[:1].isspace() and current_tokens:
+            grouped.append((current_start, "".join(current_tokens)))
+            current_start = float(timestamp)
+            current_tokens = []
+        current_tokens.append(token)
+    grouped.append((current_start, "".join(current_tokens)))
+
+    words: list[Word] = []
+    for index, (relative_start, text) in enumerate(grouped):
+        start = min(
+            segment_end,
+            max(segment_start, segment_start + relative_start),
+        )
+        next_start = next(
+            (
+                candidate_start
+                for candidate_start, _ in grouped[index + 1 :]
+                if candidate_start > relative_start
+            ),
+            None,
+        )
+        end = max(
+            start,
+            min(segment_end, segment_start + next_start)
+            if next_start is not None
+            else segment_end,
+        )
+        words.append(Word(start=start, end=end, text=text))
+    return words
