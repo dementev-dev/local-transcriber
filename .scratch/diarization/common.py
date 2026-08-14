@@ -64,12 +64,22 @@ class _ProcessMemoryCounters(ctypes.Structure):
 def peak_rss_mb() -> float | None:
     """Пиковая рабочая память процесса в МБ; None, если снять не удалось.
 
-    Два подвоха, на которых замер в разведке 2026-08-12 вернул ноль:
+    На Linux ``ru_maxrss`` измеряется в КиБ, на macOS — в байтах. В Windows
+    используются системные счётчики процесса.
+
+    Два подвоха, на которых замер в разведке 2026-08-12 вернул ноль в Windows:
     экспорт на современных Windows живёт в kernel32 как
     ``K32GetProcessMemoryInfo``, а без явных ``restype``/``argtypes``
     псевдодескриптор процесса уезжает в вызов как 32-битное число и функция
     молча не срабатывает.
     """
+    if sys.platform != "win32":
+        import resource
+
+        peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        divisor = 1024 * 1024 if sys.platform == "darwin" else 1024
+        return peak / divisor
+
     kernel32 = ctypes.windll.kernel32
     kernel32.GetCurrentProcess.restype = ctypes.c_void_p
     handle = kernel32.GetCurrentProcess()

@@ -61,4 +61,5 @@ uv run --with sherpa-onnx python .scratch/diarization/bench_conflict.py "<пут
   на слух — тикет #12, и он намеренно идёт до калибровки.
 - **Замер памяти чинился.** В разведке `psapi.GetProcessMemoryInfo` молча
   возвращал ноль; `common.peak_rss_mb()` теперь зовёт `K32GetProcessMemoryInfo`
-  из kernel32 и проверяет код возврата.
+  из kernel32 и проверяет код возврата. На Linux и macOS используется
+  `resource.getrusage()` с поправкой на разные единицы измерения.
