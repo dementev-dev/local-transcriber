@@ -16,6 +16,11 @@ class Backend(Protocol):
     наследование не требуется.
     """
 
+    @property
+    def word_timestamps_available(self) -> bool:
+        """Гарантирует ли выбранный backend/model пословные таймкоды."""
+        ...
+
     def ensure_model_available(
         self,
         model_name: str,

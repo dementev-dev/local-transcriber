@@ -5,7 +5,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .quality import TAIL_GAP_WARN_S, find_repetition_blocks, tail_gap
-from .types import Segment, TranscribeResult
+from .types import Segment, SpeakerTranscript, TranscribeResult
 
 _PAUSE_THRESHOLD_S = 2.0  # пауза между сегментами для разбиения на абзацы
 _MAX_PARAGRAPH_S = 60.0  # максимальная длительность абзаца
@@ -88,6 +88,18 @@ def format_duration(seconds: float) -> str:
     return f"{m:02d}:{s:02d}"
 
 
+def _format_speaker_timestamp(seconds: float, use_hours: bool) -> str:
+    total_seconds = int(seconds)
+    if use_hours:
+        hours = total_seconds // 3600
+        minutes = (total_seconds % 3600) // 60
+        secs = total_seconds % 60
+        return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+    minutes = total_seconds // 60
+    secs = total_seconds % 60
+    return f"{minutes:02d}:{secs:02d}"
+
+
 def format_transcript(
     result: TranscribeResult,
     source_filename: str,
@@ -95,6 +107,8 @@ def format_transcript(
     device_info: str,
     language_mode: str,  # см. LANGUAGE_MODES
     transcription_date: datetime | None = None,  # None -> datetime.now()
+    speaker_transcript: SpeakerTranscript | None = None,
+    diarization_warning: str | None = None,
 ) -> str:
     """Собирает markdown-транскрипт: шапка с метаданными + абзацы с таймкодами."""
     date = transcription_date or datetime.now()
@@ -123,6 +137,24 @@ def format_transcript(
             f"- **Внимание**: повторы в [{start} - {end}] ({block.count}×) "
             "— возможны галлюцинации модели"
         )
+    if speaker_transcript is not None:
+        lines.append(f"- **Голосовых кластеров**: {speaker_transcript.cluster_count}")
+        if speaker_transcript.unassigned_word_count:
+            lines.append(
+                "- **Внимание**: "
+                f"{speaker_transcript.unassigned_word_count} слов без назначенного говорящего"
+            )
+        for cluster in speaker_transcript.small_clusters:
+            label = (
+                f"Speaker {cluster.speaker}"
+                if cluster.speaker is not None
+                else "кластер без номера"
+            )
+            lines.append(
+                f"- **Внимание**: малый кластер {label}: {cluster.duration:.1f} с"
+            )
+    if diarization_warning is not None:
+        lines.append(f"- **Внимание**: {diarization_warning}")
     lines.append(f"- **Устройство**: {device_info}")
     lines.append("")
     lines.append("---")
@@ -130,6 +162,12 @@ def format_transcript(
     if not result.segments:
         lines.append("")
         lines.append("*Речь не обнаружена.*")
+    elif speaker_transcript is not None and speaker_transcript.cluster_count >= 2:
+        for turn in speaker_transcript.turns:
+            timestamp = _format_speaker_timestamp(turn.start, use_hours)
+            speaker = turn.speaker if turn.speaker is not None else "?"
+            lines.append("")
+            lines.append(f"[{timestamp}] Speaker {speaker}: {turn.text}")
     else:
         for para in _group_segments(result.segments):
             start = format_timestamp(para.start, use_hours=use_hours)

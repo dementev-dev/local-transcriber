@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import gc
-import io
-import warnings
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -18,7 +15,12 @@ from faster_whisper import WhisperModel  # noqa: E402
 from huggingface_hub import snapshot_download  # noqa: E402
 from huggingface_hub.errors import LocalEntryNotFoundError  # noqa: E402
 
-from local_transcriber.types import Segment, TranscribeResult  # noqa: E402
+from local_transcriber.types import (  # noqa: E402
+    Segment,
+    TranscribeResult,
+    Word,
+    WordTimestampsUnavailableError,
+)
 
 MODEL_REPOS = {
     "tiny": "Systran/faster-whisper-tiny",
@@ -45,6 +47,8 @@ MODEL_REQUIRED_FILES = [
 
 class FasterWhisperBackend:
     """Бэкенд транскрипции через faster-whisper (CTranslate2)."""
+
+    word_timestamps_available = True
 
     def __init__(self):
         self.actual_compute_type: str | None = None
@@ -92,7 +96,9 @@ class FasterWhisperBackend:
         """
         try:
             return WhisperModel(
-                model_path, device=device, compute_type=compute_type,
+                model_path,
+                device=device,
+                compute_type=compute_type,
                 cpu_threads=cpu_threads,
             )
         except ImportError as exc:
@@ -114,12 +120,25 @@ class FasterWhisperBackend:
     ) -> TranscribeResult:
         """Транскрибирует файл через faster-whisper."""
         segment_generator, info = model.transcribe(
-            str(file_path), language=language,
+            str(file_path),
+            language=language,
+            word_timestamps=True,
         )
         total_duration = info.duration
         segments: list[Segment] = []
+        words: list[Word] = []
         for raw_seg in segment_generator:
             seg = Segment(start=raw_seg.start, end=raw_seg.end, text=raw_seg.text)
+            raw_words = raw_seg.words or []
+            if seg.text.strip() and not raw_words:
+                raise WordTimestampsUnavailableError(
+                    "FasterWhisper не вернул пословные таймкоды "
+                    "для распознанного сегмента"
+                )
+            words.extend(
+                Word(start=raw_word.start, end=raw_word.end, text=raw_word.word)
+                for raw_word in raw_words
+            )
             if on_segment is not None:
                 on_segment(seg)
             segments.append(seg)
@@ -135,6 +154,7 @@ class FasterWhisperBackend:
             language_probability=info.language_probability,
             duration=info.duration,
             device_used="",  # оркестратор проставит actual_device
+            words=words,
         )
 
 
@@ -155,7 +175,9 @@ def _resolve_model_repo(model_name: str) -> str:
     repo_id = MODEL_REPOS.get(model_name)
     if repo_id is None:
         expected = ", ".join(MODEL_REPOS)
-        raise ValueError(f"Неподдерживаемая модель '{model_name}'. Ожидалось одно из: {expected}")
+        raise ValueError(
+            f"Неподдерживаемая модель '{model_name}'. Ожидалось одно из: {expected}"
+        )
     return repo_id
 
 
@@ -178,13 +200,17 @@ def _snapshot_download(repo_id: str, local_files_only: bool) -> str:
 
 def _validate_model_dir(model_dir: Path) -> None:
     missing = [
-        filename for filename in MODEL_REQUIRED_FILES if not (model_dir / filename).exists()
+        filename
+        for filename in MODEL_REQUIRED_FILES
+        if not (model_dir / filename).exists()
     ]
     if not any(model_dir.glob("vocabulary.*")):
         missing.append("vocabulary.*")
     if missing:
         missing_str = ", ".join(missing)
-        raise ValueError(f"Неполная локальная модель в '{model_dir}': отсутствуют {missing_str}")
+        raise ValueError(
+            f"Неполная локальная модель в '{model_dir}': отсутствуют {missing_str}"
+        )
 
 
 def _is_missing_socksio_error(exc: BaseException) -> bool:

@@ -11,8 +11,7 @@ from local_transcriber.backends.openvino import (
     OpenVINOBackend,
     _validate_model_dir,
 )
-from local_transcriber.types import UNKNOWN_LANGUAGE, Segment
-
+from local_transcriber.types import UNKNOWN_LANGUAGE, Segment, Word
 
 # === _resolve_repo ===
 
@@ -28,12 +27,18 @@ def test_model_catalog_contains_large_v3_turbo_profiles():
 
 def test_resolve_repo_exact_match():
     backend = OpenVINOBackend(compute_type_explicit=True)
-    assert backend._resolve_repo("medium", "int8") == ("OpenVINO/whisper-medium-int8-ov", "int8")
+    assert backend._resolve_repo("medium", "int8") == (
+        "OpenVINO/whisper-medium-int8-ov",
+        "int8",
+    )
 
 
 def test_resolve_repo_large_v3_fp16():
     backend = OpenVINOBackend(compute_type_explicit=True)
-    assert backend._resolve_repo("large-v3", "fp16") == ("OpenVINO/whisper-large-v3-fp16-ov", "fp16")
+    assert backend._resolve_repo("large-v3", "fp16") == (
+        "OpenVINO/whisper-large-v3-fp16-ov",
+        "fp16",
+    )
 
 
 def test_resolve_repo_explicit_unsupported_pair_raises():
@@ -53,16 +58,17 @@ def test_resolve_repo_implicit_fallback():
     """Неявный compute_type: если int8 недоступен для base, fallback на fp16."""
     backend = OpenVINOBackend(compute_type_explicit=False)
     # base + int8 не существует, но base + fp16 есть
-    assert backend._resolve_repo("base", "int8") == ("OpenVINO/whisper-base-fp16-ov", "fp16")
+    assert backend._resolve_repo("base", "int8") == (
+        "OpenVINO/whisper-base-fp16-ov",
+        "fp16",
+    )
 
 
 @pytest.mark.parametrize(
     ("model_name", "expected_compute_type"),
     [("large-v3", "fp16"), ("large-v3-turbo", "int8")],
 )
-def test_resolve_repo_implicit_large_v3_profiles(
-    model_name, expected_compute_type
-):
+def test_resolve_repo_implicit_large_v3_profiles(model_name, expected_compute_type):
     """Неявный compute_type различает обычную и turbo-модель."""
     backend = OpenVINOBackend(compute_type_explicit=False)
 
@@ -75,7 +81,10 @@ def test_resolve_repo_implicit_large_v3_profiles(
 def test_resolve_repo_explicit_large_v3_int8_respected():
     """Явный --compute-type int8 для large-v3 → уважается."""
     backend = OpenVINOBackend(compute_type_explicit=True)
-    assert backend._resolve_repo("large-v3", "int8") == ("OpenVINO/whisper-large-v3-int8-ov", "int8")
+    assert backend._resolve_repo("large-v3", "int8") == (
+        "OpenVINO/whisper-large-v3-int8-ov",
+        "int8",
+    )
 
 
 @pytest.mark.parametrize("compute_type", ["int8", "fp16"])
@@ -107,6 +116,7 @@ def test_ensure_model_available_cache_hit(mock_download, tmp_path):
     model_dir.mkdir()
     (model_dir / "openvino_encoder_model.xml").write_text("<xml/>")
     (model_dir / "openvino_decoder_model.xml").write_text("<xml/>")
+    (model_dir / "generation_config.json").write_text('{"alignment_heads": [[1, 2]]}')
     mock_download.return_value = str(model_dir)
 
     backend = OpenVINOBackend(compute_type_explicit=True)
@@ -125,6 +135,7 @@ def test_ensure_model_available_downloads(mock_download, tmp_path):
     model_dir.mkdir()
     (model_dir / "openvino_encoder_model.xml").write_text("<xml/>")
     (model_dir / "openvino_decoder_model.xml").write_text("<xml/>")
+    (model_dir / "generation_config.json").write_text('{"alignment_heads": [[1, 2]]}')
 
     mock_download.side_effect = [
         LocalEntryNotFoundError("not cached"),
@@ -145,6 +156,7 @@ def test_large_v3_turbo_model_is_resolved_and_created(mock_download, tmp_path):
     model_dir.mkdir()
     (model_dir / "openvino_encoder_model.xml").write_text("<xml/>")
     (model_dir / "openvino_decoder_model.xml").write_text("<xml/>")
+    (model_dir / "generation_config.json").write_text('{"alignment_heads": [[1, 2]]}')
     mock_download.return_value = str(model_dir)
     mock_ov = MagicMock()
 
@@ -157,10 +169,26 @@ def test_large_v3_turbo_model_is_resolved_and_created(mock_download, tmp_path):
         "OpenVINO/whisper-large-v3-turbo-int8-ov",
         local_files_only=True,
     )
-    mock_ov.WhisperPipeline.assert_called_once_with(str(model_dir), "CPU")
+    mock_ov.WhisperPipeline.assert_called_once_with(
+        str(model_dir), "CPU", word_timestamps=True
+    )
 
 
 # === create_model ===
+
+
+def test_create_model_enables_word_timestamps():
+    mock_ov = MagicMock()
+    backend = OpenVINOBackend(ov_device="openvino-cpu")
+
+    with patch.dict("sys.modules", {"openvino_genai": mock_ov}):
+        backend.create_model("/path/to/model", "openvino-cpu", "int8")
+
+    mock_ov.WhisperPipeline.assert_called_once_with(
+        "/path/to/model",
+        "CPU",
+        word_timestamps=True,
+    )
 
 
 def test_create_model_cpu():
@@ -172,7 +200,9 @@ def test_create_model_cpu():
     with patch.dict("sys.modules", {"openvino_genai": mock_ov}):
         model = backend.create_model("/path/to/model", "openvino-cpu", "int8")
 
-    mock_ov.WhisperPipeline.assert_called_once_with("/path/to/model", "CPU")
+    mock_ov.WhisperPipeline.assert_called_once_with(
+        "/path/to/model", "CPU", word_timestamps=True
+    )
     assert model is mock_pipeline
     assert backend.actual_ov_device == "CPU"
 
@@ -186,7 +216,9 @@ def test_create_model_gpu():
     with patch.dict("sys.modules", {"openvino_genai": mock_ov}):
         model = backend.create_model("/path/to/model", "openvino-gpu", "fp16")
 
-    mock_ov.WhisperPipeline.assert_called_once_with("/path/to/model", "GPU")
+    mock_ov.WhisperPipeline.assert_called_once_with(
+        "/path/to/model", "GPU", word_timestamps=True
+    )
     assert model is mock_pipeline
     assert backend.actual_ov_device == "GPU"
 
@@ -202,11 +234,16 @@ def test_create_model_openvino_auto_detects_gpu():
 
     backend = OpenVINOBackend(ov_device="openvino")
     with (
-        patch.dict("sys.modules", {"openvino_genai": mock_ov, "openvino": MagicMock(Core=mock_core)}),
+        patch.dict(
+            "sys.modules",
+            {"openvino_genai": mock_ov, "openvino": MagicMock(Core=mock_core)},
+        ),
     ):
-        model = backend.create_model("/path/to/model", "openvino", "int8")
+        backend.create_model("/path/to/model", "openvino", "int8")
 
-    mock_ov.WhisperPipeline.assert_called_once_with("/path/to/model", "GPU")
+    mock_ov.WhisperPipeline.assert_called_once_with(
+        "/path/to/model", "GPU", word_timestamps=True
+    )
     assert backend.actual_ov_device == "GPU"
 
 
@@ -221,11 +258,16 @@ def test_create_model_openvino_auto_falls_back_to_cpu():
 
     backend = OpenVINOBackend(ov_device="openvino")
     with (
-        patch.dict("sys.modules", {"openvino_genai": mock_ov, "openvino": MagicMock(Core=mock_core)}),
+        patch.dict(
+            "sys.modules",
+            {"openvino_genai": mock_ov, "openvino": MagicMock(Core=mock_core)},
+        ),
     ):
-        model = backend.create_model("/path/to/model", "openvino", "int8")
+        backend.create_model("/path/to/model", "openvino", "int8")
 
-    mock_ov.WhisperPipeline.assert_called_once_with("/path/to/model", "CPU")
+    mock_ov.WhisperPipeline.assert_called_once_with(
+        "/path/to/model", "CPU", word_timestamps=True
+    )
     assert backend.actual_ov_device == "CPU"
 
 
@@ -248,13 +290,19 @@ def test_transcribe_maps_chunks_to_segments():
 
     mock_result = MagicMock()
     mock_result.chunks = [chunk1, chunk2]
+    mock_result.words = [
+        MagicMock(start_ts=0.0, end_ts=3.5, word=" Привет мир"),
+        MagicMock(start_ts=3.5, end_ts=7.0, word=" Тестовый сегмент"),
+    ]
     mock_model.generate.return_value = mock_result
 
     raw_audio = np.zeros(16000 * 10, dtype=np.float32)  # 10 секунд
 
     with patch("faster_whisper.decode_audio", return_value=raw_audio):
         result = backend.transcribe(
-            mock_model, Path("test.mp3"), language="ru",
+            mock_model,
+            Path("test.mp3"),
+            language="ru",
         )
 
     assert len(result.segments) == 2
@@ -267,6 +315,61 @@ def test_transcribe_maps_chunks_to_segments():
     call_kwargs = mock_model.generate.call_args
     assert call_kwargs.kwargs["language"] == "<|ru|>"
     assert call_kwargs.kwargs["return_timestamps"] is True
+
+
+def test_transcribe_maps_word_level_timestamps():
+    backend = OpenVINOBackend()
+    mock_model = MagicMock()
+    raw_word = MagicMock()
+    raw_word.start_ts = 0.2
+    raw_word.end_ts = 0.8
+    raw_word.word = " Привет"
+    mock_result = MagicMock()
+    mock_result.chunks = []
+    mock_result.words = [raw_word]
+    mock_model.generate.return_value = mock_result
+
+    with patch(
+        "faster_whisper.decode_audio",
+        return_value=np.zeros(16_000, dtype=np.float32),
+    ):
+        result = backend.transcribe(mock_model, Path("test.mp3"), language="ru")
+
+    assert result.words == [Word(start=0.2, end=0.8, text=" Привет")]
+    assert mock_model.generate.call_args.kwargs["word_timestamps"] is True
+
+
+def test_transcribe_keeps_zero_duration_word_timestamp():
+    backend = OpenVINOBackend()
+    mock_model = MagicMock()
+    raw_word = MagicMock(start_ts=1.0, end_ts=1.0, word=" Слово")
+    mock_result = MagicMock(chunks=[], words=[raw_word])
+    mock_model.generate.return_value = mock_result
+
+    with patch(
+        "faster_whisper.decode_audio",
+        return_value=np.zeros(16_000, dtype=np.float32),
+    ):
+        result = backend.transcribe(mock_model, Path("test.mp3"), language="ru")
+
+    assert result.words == [Word(start=1.0, end=1.0, text=" Слово")]
+
+
+def test_transcribe_rejects_nonempty_result_without_word_timestamps():
+    backend = OpenVINOBackend()
+    chunk = MagicMock(start_ts=0.0, end_ts=1.0, text=" Текст")
+    mock_result = MagicMock(chunks=[chunk], words=None)
+    mock_model = MagicMock()
+    mock_model.generate.return_value = mock_result
+
+    with (
+        patch(
+            "faster_whisper.decode_audio",
+            return_value=np.zeros(16_000, dtype=np.float32),
+        ),
+        pytest.raises(RuntimeError, match="пословные таймкоды"),
+    ):
+        backend.transcribe(mock_model, Path("test.mp3"), language="ru")
 
 
 def test_transcribe_calls_tolist():
@@ -314,6 +417,7 @@ def test_transcribe_calls_on_segment():
     chunk.text = " Test"
     mock_result = MagicMock()
     mock_result.chunks = [chunk]
+    mock_result.words = [MagicMock(start_ts=0.0, end_ts=2.0, word=" Test")]
     mock_model.generate.return_value = mock_result
 
     raw_audio = np.zeros(16000, dtype=np.float32)
@@ -321,7 +425,10 @@ def test_transcribe_calls_on_segment():
 
     with patch("faster_whisper.decode_audio", return_value=raw_audio):
         backend.transcribe(
-            mock_model, Path("test.mp3"), language="en", on_segment=callback,
+            mock_model,
+            Path("test.mp3"),
+            language="en",
+            on_segment=callback,
         )
 
     callback.assert_called_once()
@@ -336,10 +443,23 @@ def test_transcribe_calls_on_segment():
 def test_validate_model_dir_ok(tmp_path):
     (tmp_path / "openvino_encoder_model.xml").write_text("<xml/>")
     (tmp_path / "openvino_decoder_model.xml").write_text("<xml/>")
+    (tmp_path / "generation_config.json").write_text('{"alignment_heads": [[1, 2]]}')
     _validate_model_dir(tmp_path)  # should not raise
 
 
 def test_validate_model_dir_missing(tmp_path):
     (tmp_path / "openvino_encoder_model.xml").write_text("<xml/>")
     with pytest.raises(ValueError, match="openvino_decoder_model.xml"):
+        _validate_model_dir(tmp_path)
+
+
+def test_validate_model_dir_requires_alignment_heads_for_word_timestamps(tmp_path):
+    (tmp_path / "openvino_encoder_model.xml").write_text("<xml/>")
+    (tmp_path / "openvino_decoder_model.xml").write_text("<xml/>")
+    (tmp_path / "generation_config.json").write_text(
+        '{"alignment_heads": []}',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="alignment_heads"):
         _validate_model_dir(tmp_path)

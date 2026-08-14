@@ -12,15 +12,26 @@ from local_transcriber.formatter import (
     LANGUAGE_FROM_MODEL,
     LANGUAGE_UNKNOWN,
 )
-from local_transcriber.transcriber import Segment, TranscribeFileResult, TranscribeResult
-from local_transcriber.types import UNKNOWN_LANGUAGE
+from local_transcriber.transcriber import (
+    Segment,
+    TranscribeFileResult,
+    TranscribeResult,
+)
+from local_transcriber.types import (
+    UNKNOWN_LANGUAGE,
+    DiarizationRun,
+    SpeakerInterval,
+    Word,
+)
 
 runner = CliRunner()
 
 
 def _make_result(segments=None, language="ru", device_used="cpu", duration=60.0):
     return TranscribeResult(
-        segments=[Segment(start=0.0, end=2.0, text="Hello")] if segments is None else segments,
+        segments=[Segment(start=0.0, end=2.0, text="Hello")]
+        if segments is None
+        else segments,
         language=language,
         language_probability=0.95,
         duration=duration,
@@ -36,7 +47,13 @@ def _make_backend():
     return MagicMock(name="Backend")
 
 
-def _make_tfr(result=None, model=None, actual_device="cpu", backend=None, model_path="/models/medium"):
+def _make_tfr(
+    result=None,
+    model=None,
+    actual_device="cpu",
+    backend=None,
+    model_path="/models/medium",
+):
     if result is None:
         result = _make_result()
     if model is None:
@@ -44,8 +61,11 @@ def _make_tfr(result=None, model=None, actual_device="cpu", backend=None, model_
     if backend is None:
         backend = _make_backend()
     return TranscribeFileResult(
-        result=result, model=model, actual_device=actual_device,
-        backend=backend, model_path=model_path,
+        result=result,
+        model=model,
+        actual_device=actual_device,
+        backend=backend,
+        model_path=model_path,
     )
 
 
@@ -58,9 +78,7 @@ def _make_tfr(result=None, model=None, actual_device="cpu", backend=None, model_
         ("auto", UNKNOWN_LANGUAGE, 0.0, LANGUAGE_UNKNOWN),
     ],
 )
-def test_format_language_mode(
-    requested_language, language, probability, expected
-):
+def test_format_language_mode(requested_language, language, probability, expected):
     result = _make_result(language=language)
     result.language_probability = probability
 
@@ -73,12 +91,17 @@ def _single_patches(result=None, tmp_file=None, actual_device="cpu"):
         result = _make_result(device_used=actual_device)
     model = _make_model()
     backend = _make_backend()
-    tfr = _make_tfr(result=result, model=model, actual_device=actual_device, backend=backend)
+    tfr = _make_tfr(
+        result=result, model=model, actual_device=actual_device, backend=backend
+    )
     return [
         patch("local_transcriber.cli.load_config", return_value={}),
         patch("local_transcriber.cli.validate_input_file", return_value=tmp_file),
         patch("local_transcriber.cli.detect_device", return_value=actual_device),
-        patch("local_transcriber.cli.load_model", return_value=(model, actual_device, backend, "/models/medium")),
+        patch(
+            "local_transcriber.cli.load_model",
+            return_value=(model, actual_device, backend, "/models/medium"),
+        ),
         patch("local_transcriber.cli._transcribe_file", return_value=tfr),
         patch("local_transcriber.cli.write_transcript"),
     ]
@@ -139,23 +162,293 @@ def test_cli_custom_options(tmp_path):
         patch("local_transcriber.cli.load_config", return_value={}),
         patch("local_transcriber.cli.validate_input_file", return_value=audio),
         patch("local_transcriber.cli.detect_device", return_value="cuda"),
-        patch("local_transcriber.cli.load_model", return_value=(model, "cuda", backend, "/models/small")),
+        patch(
+            "local_transcriber.cli.load_model",
+            return_value=(model, "cuda", backend, "/models/small"),
+        ),
         patch("local_transcriber.cli._transcribe_file", mock_transcribe_file),
         patch("local_transcriber.cli.write_transcript"),
         patch("local_transcriber.cli.get_gpu_name", return_value="RTX 3060"),
     ):
-        runner.invoke(app, [
-            str(audio),
-            "--model", "small",
-            "--language", "ru",
-            "--device", "cuda",
-            "--compute-type", "float16",
-        ])
+        runner.invoke(
+            app,
+            [
+                str(audio),
+                "--model",
+                "small",
+                "--language",
+                "ru",
+                "--device",
+                "cuda",
+                "--compute-type",
+                "float16",
+            ],
+        )
 
     call_kwargs = mock_transcribe_file.call_args[1]
     assert call_kwargs["model_name"] == "small"
     assert call_kwargs["language"] == "ru"
     assert call_kwargs["compute_type"] == "float16"
+
+
+def test_cli_speakers_enables_diarization_and_writes_speaker_markdown(tmp_path):
+    audio = tmp_path / "meeting.mp3"
+    audio.write_bytes(b"fake")
+    result = _make_result(
+        segments=[Segment(0.0, 1.3, "Первый. Второй. Неясно.")],
+        duration=10.0,
+    )
+    result.words = [
+        Word(0.0, 0.5, "Первый."),
+        Word(0.5, 1.0, "Второй."),
+        Word(1.1, 1.3, "Неясно."),
+    ]
+    model = _make_model()
+    backend = _make_backend()
+    backend.word_timestamps_available = True
+    tfr = _make_tfr(result=result, model=model, backend=backend)
+    diarizer = MagicMock()
+    diarizer.process.return_value = DiarizationRun(
+        intervals=[
+            SpeakerInterval(0.0, 0.5, 10),
+            SpeakerInterval(0.5, 1.0, 20),
+        ],
+        elapsed_seconds=0.2,
+    )
+    write = MagicMock()
+
+    with (
+        patch("local_transcriber.cli.load_config", return_value={}),
+        patch("local_transcriber.cli.validate_input_file", return_value=audio),
+        patch("local_transcriber.cli.detect_device", return_value="cpu"),
+        patch(
+            "local_transcriber.cli.load_model",
+            return_value=(model, "cpu", backend, "/models/medium"),
+        ),
+        patch("local_transcriber.cli._transcribe_file", return_value=tfr),
+        patch(
+            "local_transcriber.cli.load_speaker_diarizer",
+            return_value=diarizer,
+        ) as load_diarizer,
+        patch("local_transcriber.cli.write_transcript", write),
+    ):
+        out = runner.invoke(
+            app,
+            [str(audio), "--speakers", "2", "--threads", "3"],
+        )
+
+    assert out.exit_code == 0
+    load_diarizer.assert_called_once()
+    assert load_diarizer.call_args.kwargs["speakers"] == 2
+    assert load_diarizer.call_args.kwargs["threads"] == 3
+    diarizer.process.assert_called_once()
+    assert "Speaker 1: Первый." in write.call_args.args[0]
+    assert "Speaker 2: Второй." in write.call_args.args[0]
+    assert "Speaker ?: Неясно." in write.call_args.args[0]
+    assert "1 слов без назначенного говорящего" in out.output
+    assert "малый кластер Speaker 1: 0.5 с" in out.output
+
+
+def test_cli_diarization_error_writes_plain_transcript_and_exits_nonzero(tmp_path):
+    audio = tmp_path / "meeting.mp3"
+    audio.write_bytes(b"fake")
+    result = _make_result(
+        segments=[Segment(0.0, 1.0, "Полезный текст.")],
+        duration=10.0,
+    )
+    result.words = [Word(0.0, 1.0, "Полезный текст.")]
+    model = _make_model()
+    backend = _make_backend()
+    backend.word_timestamps_available = True
+    tfr = _make_tfr(result=result, model=model, backend=backend)
+    diarizer = MagicMock()
+    diarizer.process.side_effect = RuntimeError("boom")
+    write = MagicMock()
+
+    with (
+        patch("local_transcriber.cli.load_config", return_value={}),
+        patch("local_transcriber.cli.validate_input_file", return_value=audio),
+        patch("local_transcriber.cli.detect_device", return_value="cpu"),
+        patch(
+            "local_transcriber.cli.load_model",
+            return_value=(model, "cpu", backend, "/models/medium"),
+        ),
+        patch("local_transcriber.cli._transcribe_file", return_value=tfr),
+        patch(
+            "local_transcriber.cli.load_speaker_diarizer",
+            return_value=diarizer,
+        ),
+        patch("local_transcriber.cli.write_transcript", write),
+    ):
+        out = runner.invoke(app, [str(audio), "--diarize"])
+
+    assert out.exit_code == 1
+    assert write.call_count == 1
+    assert "Полезный текст." in write.call_args.args[0]
+    assert "Диаризация завершилась с ошибкой: boom" in write.call_args.args[0]
+
+
+def test_cli_verbose_reports_diarization_counts_and_duration(tmp_path):
+    audio = tmp_path / "meeting.mp3"
+    audio.write_bytes(b"fake")
+    result = _make_result(
+        segments=[Segment(0.0, 1.0, "Раз два")],
+        duration=10.0,
+    )
+    result.words = [Word(0.0, 0.5, "Раз"), Word(0.5, 1.0, "два")]
+    model = _make_model()
+    backend = _make_backend()
+    backend.word_timestamps_available = True
+    tfr = _make_tfr(result=result, model=model, backend=backend)
+    diarizer = MagicMock()
+    diarizer.process.return_value = DiarizationRun(
+        intervals=[
+            SpeakerInterval(0.0, 0.5, 1),
+            SpeakerInterval(0.5, 1.0, 2),
+        ],
+        elapsed_seconds=0.2,
+    )
+
+    with (
+        patch("local_transcriber.cli.load_config", return_value={}),
+        patch("local_transcriber.cli.validate_input_file", return_value=audio),
+        patch("local_transcriber.cli.detect_device", return_value="cpu"),
+        patch(
+            "local_transcriber.cli.load_model",
+            return_value=(model, "cpu", backend, "/models/medium"),
+        ),
+        patch("local_transcriber.cli._transcribe_file", return_value=tfr),
+        patch(
+            "local_transcriber.cli.load_speaker_diarizer",
+            return_value=diarizer,
+        ),
+        patch("local_transcriber.cli.write_transcript"),
+    ):
+        out = runner.invoke(app, [str(audio), "--diarize", "--verbose"])
+
+    assert out.exit_code == 0
+    assert "2 кластеров, 2 интервалов" in out.output
+    assert "0.2 с" in out.output
+
+
+def test_cli_empty_asr_skips_diarizer_and_reports_it(tmp_path):
+    audio = tmp_path / "silence.wav"
+    audio.write_bytes(b"fake")
+    result = _make_result(segments=[])
+    model = _make_model()
+    backend = _make_backend()
+    backend.word_timestamps_available = True
+    tfr = _make_tfr(result=result, model=model, backend=backend)
+    diarizer = MagicMock()
+
+    with (
+        patch("local_transcriber.cli.load_config", return_value={}),
+        patch("local_transcriber.cli.validate_input_file", return_value=audio),
+        patch("local_transcriber.cli.detect_device", return_value="cpu"),
+        patch(
+            "local_transcriber.cli.load_model",
+            return_value=(model, "cpu", backend, "/models/medium"),
+        ),
+        patch("local_transcriber.cli._transcribe_file", return_value=tfr),
+        patch(
+            "local_transcriber.cli.load_speaker_diarizer",
+            return_value=diarizer,
+        ),
+        patch("local_transcriber.cli.write_transcript"),
+    ):
+        out = runner.invoke(app, [str(audio), "--diarize"])
+
+    assert out.exit_code == 0
+    diarizer.process.assert_not_called()
+    assert "диаризация не запускалась" in out.output
+
+
+def test_cli_diarizer_preflight_failure_does_not_start_asr_or_write(tmp_path):
+    audio = tmp_path / "meeting.mp3"
+    audio.write_bytes(b"fake")
+    model = _make_model()
+    backend = _make_backend()
+    backend.word_timestamps_available = True
+    transcribe_file = MagicMock()
+    write = MagicMock()
+
+    with (
+        patch("local_transcriber.cli.load_config", return_value={}),
+        patch("local_transcriber.cli.validate_input_file", return_value=audio),
+        patch("local_transcriber.cli.detect_device", return_value="cpu"),
+        patch(
+            "local_transcriber.cli.load_model",
+            return_value=(model, "cpu", backend, "/models/medium"),
+        ),
+        patch("local_transcriber.cli._transcribe_file", transcribe_file),
+        patch(
+            "local_transcriber.cli.load_speaker_diarizer",
+            side_effect=RuntimeError("модель повреждена"),
+        ),
+        patch("local_transcriber.cli.write_transcript", write),
+    ):
+        out = runner.invoke(app, [str(audio), "--diarize"])
+
+    assert out.exit_code == 1
+    transcribe_file.assert_not_called()
+    write.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("intervals", "warning"),
+    [
+        ([SpeakerInterval(0.0, 1.0, 1)], "только один голосовой кластер"),
+        ([], "не нашёл интервалов"),
+    ],
+)
+def test_cli_unsuccessful_diarization_shape_writes_plain_text_and_exits_nonzero(
+    tmp_path, intervals, warning
+):
+    audio = tmp_path / "meeting.mp3"
+    audio.write_bytes(b"fake")
+    result = _make_result(
+        segments=[Segment(0.0, 1.0, "Раз два")],
+        duration=10.0,
+    )
+    result.words = [Word(0.0, 0.5, "Раз"), Word(0.5, 1.0, "два")]
+    model = _make_model()
+    backend = _make_backend()
+    backend.word_timestamps_available = True
+    tfr = _make_tfr(result=result, model=model, backend=backend)
+    diarizer = MagicMock()
+    diarizer.process.return_value = DiarizationRun(intervals, elapsed_seconds=0.1)
+    write = MagicMock()
+
+    with (
+        patch("local_transcriber.cli.load_config", return_value={}),
+        patch("local_transcriber.cli.validate_input_file", return_value=audio),
+        patch("local_transcriber.cli.detect_device", return_value="cpu"),
+        patch(
+            "local_transcriber.cli.load_model",
+            return_value=(model, "cpu", backend, "/models/medium"),
+        ),
+        patch("local_transcriber.cli._transcribe_file", return_value=tfr),
+        patch(
+            "local_transcriber.cli.load_speaker_diarizer",
+            return_value=diarizer,
+        ),
+        patch("local_transcriber.cli.write_transcript", write),
+    ):
+        out = runner.invoke(app, [str(audio), "--diarize"])
+
+    assert out.exit_code == 1
+    content = write.call_args.args[0]
+    assert warning in content
+    assert "[00:00.00 - 00:01.00] Раз два" in content
+
+
+def test_cli_rejects_nonpositive_speaker_count(tmp_path):
+    audio = tmp_path / "meeting.mp3"
+    audio.write_bytes(b"fake")
+
+    out = runner.invoke(app, [str(audio), "--speakers", "0"])
+
+    assert out.exit_code == 2
 
 
 def test_cli_verbose_passes_on_segment_callback(tmp_path):
@@ -171,7 +464,10 @@ def test_cli_verbose_passes_on_segment_callback(tmp_path):
         patch("local_transcriber.cli.load_config", return_value={}),
         patch("local_transcriber.cli.validate_input_file", return_value=audio),
         patch("local_transcriber.cli.detect_device", return_value="cpu"),
-        patch("local_transcriber.cli.load_model", return_value=(model, "cpu", backend, "/models/medium")),
+        patch(
+            "local_transcriber.cli.load_model",
+            return_value=(model, "cpu", backend, "/models/medium"),
+        ),
         patch("local_transcriber.cli._transcribe_file", mock_transcribe_file),
         patch("local_transcriber.cli.write_transcript"),
     ):
@@ -209,7 +505,10 @@ def test_cli_default_output_path(tmp_path):
         patch("local_transcriber.cli.load_config", return_value={}),
         patch("local_transcriber.cli.validate_input_file", return_value=audio),
         patch("local_transcriber.cli.detect_device", return_value="cpu"),
-        patch("local_transcriber.cli.load_model", return_value=(model, "cpu", backend, "/models/medium")),
+        patch(
+            "local_transcriber.cli.load_model",
+            return_value=(model, "cpu", backend, "/models/medium"),
+        ),
         patch("local_transcriber.cli._transcribe_file", return_value=tfr),
         patch("local_transcriber.cli.write_transcript", mock_write),
     ):
@@ -234,7 +533,10 @@ def test_cli_custom_output_path(tmp_path):
         patch("local_transcriber.cli.load_config", return_value={}),
         patch("local_transcriber.cli.validate_input_file", return_value=audio),
         patch("local_transcriber.cli.detect_device", return_value="cpu"),
-        patch("local_transcriber.cli.load_model", return_value=(model, "cpu", backend, "/models/medium")),
+        patch(
+            "local_transcriber.cli.load_model",
+            return_value=(model, "cpu", backend, "/models/medium"),
+        ),
         patch("local_transcriber.cli._transcribe_file", return_value=tfr),
         patch("local_transcriber.cli.write_transcript", mock_write),
     ):
@@ -257,7 +559,10 @@ def test_cli_passes_status_callback_to_transcribe(tmp_path):
         patch("local_transcriber.cli.load_config", return_value={}),
         patch("local_transcriber.cli.validate_input_file", return_value=audio),
         patch("local_transcriber.cli.detect_device", return_value="cpu"),
-        patch("local_transcriber.cli.load_model", return_value=(model, "cpu", backend, "/models/medium")),
+        patch(
+            "local_transcriber.cli.load_model",
+            return_value=(model, "cpu", backend, "/models/medium"),
+        ),
         patch("local_transcriber.cli._transcribe_file", mock_transcribe_file),
         patch("local_transcriber.cli.write_transcript"),
     ):
@@ -276,7 +581,9 @@ def test_cli_load_model_called_with_model_name(tmp_path):
     model = _make_model()
     backend = _make_backend()
     tfr = _make_tfr(result=result, model=model, backend=backend)
-    mock_load_model = MagicMock(return_value=(model, "cpu", backend, "/models/large-v3"))
+    mock_load_model = MagicMock(
+        return_value=(model, "cpu", backend, "/models/large-v3")
+    )
 
     with (
         patch("local_transcriber.cli.load_config", return_value={}),
@@ -302,8 +609,14 @@ def test_cli_windows_cuda_diagnostic(tmp_path):
         patch("local_transcriber.cli.load_config", return_value={}),
         patch("local_transcriber.cli.validate_input_file", return_value=audio),
         patch("local_transcriber.cli.detect_device", return_value="cuda"),
-        patch("local_transcriber.cli.load_model", return_value=(model, "cuda", backend, "/models/medium")),
-        patch("local_transcriber.cli._transcribe_file", side_effect=RuntimeError("CUDA error: no device")),
+        patch(
+            "local_transcriber.cli.load_model",
+            return_value=(model, "cuda", backend, "/models/medium"),
+        ),
+        patch(
+            "local_transcriber.cli._transcribe_file",
+            side_effect=RuntimeError("CUDA error: no device"),
+        ),
         patch("local_transcriber.cli.sys") as mock_sys,
     ):
         mock_sys.platform = "win32"
@@ -325,8 +638,14 @@ def test_cli_linux_cuda_error_no_windows_hint(tmp_path):
         patch("local_transcriber.cli.load_config", return_value={}),
         patch("local_transcriber.cli.validate_input_file", return_value=audio),
         patch("local_transcriber.cli.detect_device", return_value="cuda"),
-        patch("local_transcriber.cli.load_model", return_value=(model, "cuda", backend, "/models/medium")),
-        patch("local_transcriber.cli._transcribe_file", side_effect=RuntimeError("CUDA error: no device")),
+        patch(
+            "local_transcriber.cli.load_model",
+            return_value=(model, "cuda", backend, "/models/medium"),
+        ),
+        patch(
+            "local_transcriber.cli._transcribe_file",
+            side_effect=RuntimeError("CUDA error: no device"),
+        ),
         patch("local_transcriber.cli.sys") as mock_sys,
     ):
         mock_sys.platform = "linux"
@@ -349,7 +668,10 @@ def test_cli_device_fallback_warning(tmp_path):
         patch("local_transcriber.cli.load_config", return_value={}),
         patch("local_transcriber.cli.validate_input_file", return_value=audio),
         patch("local_transcriber.cli.detect_device", return_value="cuda"),
-        patch("local_transcriber.cli.load_model", return_value=(model, "cuda", backend, "/models/medium")),
+        patch(
+            "local_transcriber.cli.load_model",
+            return_value=(model, "cuda", backend, "/models/medium"),
+        ),
         patch("local_transcriber.cli._transcribe_file", return_value=tfr),
         patch("local_transcriber.cli.write_transcript"),
     ):
@@ -372,7 +694,10 @@ def test_cli_strict_device_passed_to_transcribe(tmp_path):
         patch("local_transcriber.cli.load_config", return_value={}),
         patch("local_transcriber.cli.validate_input_file", return_value=audio),
         patch("local_transcriber.cli.detect_device", return_value="cuda"),
-        patch("local_transcriber.cli.load_model", return_value=(model, "cuda", backend, "/models/medium")),
+        patch(
+            "local_transcriber.cli.load_model",
+            return_value=(model, "cuda", backend, "/models/medium"),
+        ),
         patch("local_transcriber.cli._transcribe_file", mock_transcribe_file),
         patch("local_transcriber.cli.write_transcript"),
         patch("local_transcriber.cli.get_gpu_name", return_value="RTX 3060"),
@@ -390,7 +715,10 @@ def test_cli_strict_device_passed_to_transcribe(tmp_path):
         patch("local_transcriber.cli.load_config", return_value={}),
         patch("local_transcriber.cli.validate_input_file", return_value=audio),
         patch("local_transcriber.cli.detect_device", return_value="cpu"),
-        patch("local_transcriber.cli.load_model", return_value=(model, "cpu", backend, "/models/medium")),
+        patch(
+            "local_transcriber.cli.load_model",
+            return_value=(model, "cpu", backend, "/models/medium"),
+        ),
         patch("local_transcriber.cli._transcribe_file", mock_transcribe_file),
         patch("local_transcriber.cli.write_transcript"),
     ):
@@ -410,7 +738,10 @@ def test_cli_keyboard_interrupt(tmp_path):
         patch("local_transcriber.cli.load_config", return_value={}),
         patch("local_transcriber.cli.validate_input_file", return_value=audio),
         patch("local_transcriber.cli.detect_device", return_value="cpu"),
-        patch("local_transcriber.cli.load_model", return_value=(model, "cpu", backend, "/models/medium")),
+        patch(
+            "local_transcriber.cli.load_model",
+            return_value=(model, "cpu", backend, "/models/medium"),
+        ),
         patch("local_transcriber.cli._transcribe_file", side_effect=KeyboardInterrupt),
         patch("local_transcriber.cli.write_transcript"),
     ):
@@ -443,8 +774,14 @@ def test_cli_unexpected_error_verbose_traceback(tmp_path):
         patch("local_transcriber.cli.load_config", return_value={}),
         patch("local_transcriber.cli.validate_input_file", return_value=audio),
         patch("local_transcriber.cli.detect_device", return_value="cpu"),
-        patch("local_transcriber.cli.load_model", return_value=(model, "cpu", backend, "/models/medium")),
-        patch("local_transcriber.cli._transcribe_file", side_effect=RuntimeError("unexpected boom")),
+        patch(
+            "local_transcriber.cli.load_model",
+            return_value=(model, "cpu", backend, "/models/medium"),
+        ),
+        patch(
+            "local_transcriber.cli._transcribe_file",
+            side_effect=RuntimeError("unexpected boom"),
+        ),
         patch("local_transcriber.cli.write_transcript"),
     ):
         out = runner.invoke(app, [str(audio), "--verbose"])
@@ -464,8 +801,14 @@ def test_cli_unexpected_error_no_verbose_hint(tmp_path):
         patch("local_transcriber.cli.load_config", return_value={}),
         patch("local_transcriber.cli.validate_input_file", return_value=audio),
         patch("local_transcriber.cli.detect_device", return_value="cpu"),
-        patch("local_transcriber.cli.load_model", return_value=(model, "cpu", backend, "/models/medium")),
-        patch("local_transcriber.cli._transcribe_file", side_effect=RuntimeError("unexpected boom")),
+        patch(
+            "local_transcriber.cli.load_model",
+            return_value=(model, "cpu", backend, "/models/medium"),
+        ),
+        patch(
+            "local_transcriber.cli._transcribe_file",
+            side_effect=RuntimeError("unexpected boom"),
+        ),
         patch("local_transcriber.cli.write_transcript"),
     ):
         out = runner.invoke(app, [str(audio)])
@@ -493,7 +836,10 @@ def test_cli_batch_two_files(tmp_path):
         patch("local_transcriber.cli.load_config", return_value={}),
         patch("local_transcriber.cli.validate_input_file", side_effect=lambda p: p),
         patch("local_transcriber.cli.detect_device", return_value="cpu"),
-        patch("local_transcriber.cli.load_model", return_value=(model, "cpu", backend, "/models/medium")),
+        patch(
+            "local_transcriber.cli.load_model",
+            return_value=(model, "cpu", backend, "/models/medium"),
+        ),
         patch("local_transcriber.cli._transcribe_file", return_value=tfr),
         patch("local_transcriber.cli.write_transcript"),
     ):
@@ -501,6 +847,111 @@ def test_cli_batch_two_files(tmp_path):
 
     assert out.exit_code == 0
     assert "2 обработано" in out.output
+
+
+def test_cli_batch_reuses_one_diarizer_for_all_nonempty_files(tmp_path):
+    first = tmp_path / "first.mp3"
+    second = tmp_path / "second.mp3"
+    first.write_bytes(b"fake")
+    second.write_bytes(b"fake")
+    result = _make_result(
+        segments=[Segment(0.0, 1.0, "Раз два")],
+        duration=10.0,
+    )
+    result.words = [Word(0.0, 0.5, "Раз"), Word(0.5, 1.0, "два")]
+    model = _make_model()
+    backend = _make_backend()
+    backend.word_timestamps_available = True
+    tfr = _make_tfr(result=result, model=model, backend=backend)
+    diarizer = MagicMock()
+    diarizer.process.return_value = DiarizationRun(
+        intervals=[
+            SpeakerInterval(0.0, 0.5, 1),
+            SpeakerInterval(0.5, 1.0, 2),
+        ],
+        elapsed_seconds=0.1,
+    )
+
+    with (
+        patch("local_transcriber.cli.load_config", return_value={}),
+        patch(
+            "local_transcriber.cli.validate_input_file",
+            side_effect=lambda path: path,
+        ),
+        patch("local_transcriber.cli.detect_device", return_value="cpu"),
+        patch(
+            "local_transcriber.cli.load_model",
+            return_value=(model, "cpu", backend, "/models/medium"),
+        ),
+        patch("local_transcriber.cli._transcribe_file", return_value=tfr),
+        patch(
+            "local_transcriber.cli.load_speaker_diarizer",
+            return_value=diarizer,
+        ) as load_diarizer,
+        patch("local_transcriber.cli.write_transcript") as write,
+    ):
+        out = runner.invoke(app, [str(first), str(second), "--diarize"])
+
+    assert out.exit_code == 0
+    load_diarizer.assert_called_once()
+    assert [call.args[0] for call in diarizer.process.call_args_list] == [
+        first,
+        second,
+    ]
+    assert write.call_count == 2
+
+
+def test_cli_batch_continues_after_diarization_error_and_exits_nonzero(tmp_path):
+    first = tmp_path / "first.mp3"
+    second = tmp_path / "second.mp3"
+    first.write_bytes(b"fake")
+    second.write_bytes(b"fake")
+    result = _make_result(
+        segments=[Segment(0.0, 1.0, "Раз два")],
+        duration=10.0,
+    )
+    result.words = [Word(0.0, 0.5, "Раз"), Word(0.5, 1.0, "два")]
+    model = _make_model()
+    backend = _make_backend()
+    backend.word_timestamps_available = True
+    tfr = _make_tfr(result=result, model=model, backend=backend)
+    diarizer = MagicMock()
+    diarizer.process.side_effect = [
+        RuntimeError("boom"),
+        DiarizationRun(
+            [
+                SpeakerInterval(0.0, 0.5, 1),
+                SpeakerInterval(0.5, 1.0, 2),
+            ],
+            elapsed_seconds=0.1,
+        ),
+    ]
+
+    with (
+        patch("local_transcriber.cli.load_config", return_value={}),
+        patch(
+            "local_transcriber.cli.validate_input_file",
+            side_effect=lambda path: path,
+        ),
+        patch("local_transcriber.cli.detect_device", return_value="cpu"),
+        patch(
+            "local_transcriber.cli.load_model",
+            return_value=(model, "cpu", backend, "/models/medium"),
+        ),
+        patch("local_transcriber.cli._transcribe_file", return_value=tfr),
+        patch(
+            "local_transcriber.cli.load_speaker_diarizer",
+            return_value=diarizer,
+        ),
+        patch("local_transcriber.cli.write_transcript") as write,
+    ):
+        out = runner.invoke(app, [str(first), str(second), "--diarize"])
+
+    assert out.exit_code == 1
+    assert write.call_count == 2
+    assert "Диаризация завершилась с ошибкой: boom" in write.call_args_list[0].args[0]
+    assert "Speaker 1" in write.call_args_list[1].args[0]
+    assert "1 с деградацией" in out.output
 
 
 def test_cli_batch_skips_existing(tmp_path):
@@ -519,7 +970,10 @@ def test_cli_batch_skips_existing(tmp_path):
         patch("local_transcriber.cli.load_config", return_value={}),
         patch("local_transcriber.cli.validate_input_file", side_effect=lambda p: p),
         patch("local_transcriber.cli.detect_device", return_value="cpu"),
-        patch("local_transcriber.cli.load_model", return_value=(model, "cpu", backend, "/models/medium")),
+        patch(
+            "local_transcriber.cli.load_model",
+            return_value=(model, "cpu", backend, "/models/medium"),
+        ),
         patch("local_transcriber.cli._transcribe_file", return_value=tfr),
         patch("local_transcriber.cli.write_transcript"),
     ):
@@ -540,16 +994,22 @@ def test_cli_batch_all_skipped_no_model_load(tmp_path):
     (tmp_path / "b-transcript.md").write_text("existing")
 
     mock_load_model = MagicMock()
+    mock_load_diarizer = MagicMock()
 
     with (
         patch("local_transcriber.cli.load_config", return_value={}),
         patch("local_transcriber.cli.validate_input_file", side_effect=lambda p: p),
         patch("local_transcriber.cli.load_model", mock_load_model),
+        patch(
+            "local_transcriber.cli.load_speaker_diarizer",
+            mock_load_diarizer,
+        ),
     ):
-        out = runner.invoke(app, [str(a), str(b)])
+        out = runner.invoke(app, [str(a), str(b), "--diarize"])
 
     assert out.exit_code == 0
     mock_load_model.assert_not_called()
+    mock_load_diarizer.assert_not_called()
 
 
 def test_cli_batch_force_overwrites(tmp_path):
@@ -568,7 +1028,10 @@ def test_cli_batch_force_overwrites(tmp_path):
         patch("local_transcriber.cli.load_config", return_value={}),
         patch("local_transcriber.cli.validate_input_file", side_effect=lambda p: p),
         patch("local_transcriber.cli.detect_device", return_value="cpu"),
-        patch("local_transcriber.cli.load_model", return_value=(model, "cpu", backend, "/models/medium")),
+        patch(
+            "local_transcriber.cli.load_model",
+            return_value=(model, "cpu", backend, "/models/medium"),
+        ),
         patch("local_transcriber.cli._transcribe_file", return_value=tfr),
         patch("local_transcriber.cli.write_transcript"),
     ):
@@ -602,8 +1065,13 @@ def test_cli_batch_per_file_error(tmp_path):
         patch("local_transcriber.cli.load_config", return_value={}),
         patch("local_transcriber.cli.validate_input_file", side_effect=lambda p: p),
         patch("local_transcriber.cli.detect_device", return_value="cpu"),
-        patch("local_transcriber.cli.load_model", return_value=(model, "cpu", backend, "/models/medium")),
-        patch("local_transcriber.cli._transcribe_file", side_effect=transcribe_side_effect),
+        patch(
+            "local_transcriber.cli.load_model",
+            return_value=(model, "cpu", backend, "/models/medium"),
+        ),
+        patch(
+            "local_transcriber.cli._transcribe_file", side_effect=transcribe_side_effect
+        ),
         patch("local_transcriber.cli.write_transcript"),
     ):
         out = runner.invoke(app, [str(a), str(b)])
@@ -631,9 +1099,15 @@ def test_cli_batch_invalid_in_prescan(tmp_path):
 
     with (
         patch("local_transcriber.cli.load_config", return_value={}),
-        patch("local_transcriber.cli.validate_input_file", side_effect=validate_side_effect),
+        patch(
+            "local_transcriber.cli.validate_input_file",
+            side_effect=validate_side_effect,
+        ),
         patch("local_transcriber.cli.detect_device", return_value="cpu"),
-        patch("local_transcriber.cli.load_model", return_value=(model, "cpu", backend, "/models/medium")),
+        patch(
+            "local_transcriber.cli.load_model",
+            return_value=(model, "cpu", backend, "/models/medium"),
+        ),
         patch("local_transcriber.cli._transcribe_file", return_value=tfr),
         patch("local_transcriber.cli.write_transcript"),
     ):
@@ -768,7 +1242,10 @@ def test_cli_batch_fallback_warning(tmp_path):
         patch("local_transcriber.cli.load_config", return_value={}),
         patch("local_transcriber.cli.validate_input_file", side_effect=lambda p: p),
         patch("local_transcriber.cli.detect_device", return_value="cuda"),
-        patch("local_transcriber.cli.load_model", return_value=(model, "cpu", backend, "/models/medium")),
+        patch(
+            "local_transcriber.cli.load_model",
+            return_value=(model, "cpu", backend, "/models/medium"),
+        ),
         patch("local_transcriber.cli._transcribe_file", return_value=tfr),
         patch("local_transcriber.cli.write_transcript"),
     ):
@@ -795,8 +1272,13 @@ def test_cli_batch_empty_speech_warning(tmp_path):
         patch("local_transcriber.cli.load_config", return_value={}),
         patch("local_transcriber.cli.validate_input_file", side_effect=lambda p: p),
         patch("local_transcriber.cli.detect_device", return_value="cpu"),
-        patch("local_transcriber.cli.load_model", return_value=(model, "cpu", backend, "/models/medium")),
-        patch("local_transcriber.cli._transcribe_file", side_effect=[tfr_empty, tfr_ok]),
+        patch(
+            "local_transcriber.cli.load_model",
+            return_value=(model, "cpu", backend, "/models/medium"),
+        ),
+        patch(
+            "local_transcriber.cli._transcribe_file", side_effect=[tfr_empty, tfr_ok]
+        ),
         patch("local_transcriber.cli.write_transcript"),
     ):
         out = runner.invoke(app, [str(a), str(b)])
@@ -817,15 +1299,24 @@ def test_cli_batch_midstream_fallback_warning(tmp_path):
     model_cpu = _make_model()
     backend = _make_backend()
     result = _make_result(device_used="cpu")
-    tfr_fallback = _make_tfr(result=result, model=model_cpu, actual_device="cpu", backend=backend)
-    tfr_ok = _make_tfr(result=result, model=model_cpu, actual_device="cpu", backend=backend)
+    tfr_fallback = _make_tfr(
+        result=result, model=model_cpu, actual_device="cpu", backend=backend
+    )
+    tfr_ok = _make_tfr(
+        result=result, model=model_cpu, actual_device="cpu", backend=backend
+    )
 
     with (
         patch("local_transcriber.cli.load_config", return_value={}),
         patch("local_transcriber.cli.validate_input_file", side_effect=lambda p: p),
         patch("local_transcriber.cli.detect_device", return_value="cuda"),
-        patch("local_transcriber.cli.load_model", return_value=(model_gpu, "cuda", backend, "/models/medium")),
-        patch("local_transcriber.cli._transcribe_file", side_effect=[tfr_fallback, tfr_ok]),
+        patch(
+            "local_transcriber.cli.load_model",
+            return_value=(model_gpu, "cuda", backend, "/models/medium"),
+        ),
+        patch(
+            "local_transcriber.cli._transcribe_file", side_effect=[tfr_fallback, tfr_ok]
+        ),
         patch("local_transcriber.cli.write_transcript"),
     ):
         out = runner.invoke(app, [str(a), str(b)])
@@ -864,8 +1355,14 @@ def test_cli_batch_model_loaded_once(tmp_path):
 
 
 def test_format_device_info_openvino_gpu():
-    with patch("local_transcriber.cli.get_intel_gpu_name", return_value="Intel(R) Arc(TM) 140T GPU"):
-        assert _format_device_info("openvino-gpu") == "OpenVINO (Intel(R) Arc(TM) 140T GPU)"
+    with patch(
+        "local_transcriber.cli.get_intel_gpu_name",
+        return_value="Intel(R) Arc(TM) 140T GPU",
+    ):
+        assert (
+            _format_device_info("openvino-gpu")
+            == "OpenVINO (Intel(R) Arc(TM) 140T GPU)"
+        )
 
 
 def test_format_device_info_openvino_gpu_no_name():
@@ -900,9 +1397,13 @@ def test_cli_openvino_gpu_happy_path(tmp_path):
     audio.write_bytes(b"fake")
     result = _make_result(device_used="openvino-gpu")
 
-    patches = _single_patches(result=result, tmp_file=audio, actual_device="openvino-gpu")
+    patches = _single_patches(
+        result=result, tmp_file=audio, actual_device="openvino-gpu"
+    )
     with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
-        with patch("local_transcriber.cli.get_intel_gpu_name", return_value="Intel Arc 140T"):
+        with patch(
+            "local_transcriber.cli.get_intel_gpu_name", return_value="Intel Arc 140T"
+        ):
             out = runner.invoke(app, [str(audio), "--device", "openvino-gpu"])
 
     assert out.exit_code == 0
@@ -915,8 +1416,12 @@ def test_cli_openvino_alias_resolves_to_gpu(tmp_path):
     result = _make_result(device_used="openvino-gpu")
     model = _make_model()
     backend = _make_backend()
-    tfr = _make_tfr(result=result, model=model, actual_device="openvino-gpu", backend=backend)
-    mock_load_model = MagicMock(return_value=(model, "openvino-gpu", backend, "/models/medium"))
+    tfr = _make_tfr(
+        result=result, model=model, actual_device="openvino-gpu", backend=backend
+    )
+    mock_load_model = MagicMock(
+        return_value=(model, "openvino-gpu", backend, "/models/medium")
+    )
 
     with (
         patch("local_transcriber.cli.load_config", return_value={}),
@@ -925,7 +1430,9 @@ def test_cli_openvino_alias_resolves_to_gpu(tmp_path):
         patch("local_transcriber.cli.load_model", mock_load_model),
         patch("local_transcriber.cli._transcribe_file", return_value=tfr),
         patch("local_transcriber.cli.write_transcript"),
-        patch("local_transcriber.cli.get_intel_gpu_name", return_value="Intel Arc 140T"),
+        patch(
+            "local_transcriber.cli.get_intel_gpu_name", return_value="Intel Arc 140T"
+        ),
     ):
         out = runner.invoke(app, [str(audio), "--device", "openvino"])
 
@@ -1000,7 +1507,9 @@ def test_cli_install_menu_success(tmp_path):
     cmd_path = tmp_path / "Transcribe.cmd"
 
     with (
-        patch("local_transcriber.cli.install_context_menu", return_value=cmd_path) as mock_install,
+        patch(
+            "local_transcriber.cli.install_context_menu", return_value=cmd_path
+        ) as mock_install,
         patch("local_transcriber.cli.load_config") as mock_load_config,
         patch("local_transcriber.cli.sys") as mock_sys,
     ):
@@ -1018,7 +1527,9 @@ def test_cli_uninstall_menu_success(tmp_path):
     cmd_path = tmp_path / "Transcribe.cmd"
 
     with (
-        patch("local_transcriber.cli.uninstall_context_menu", return_value=cmd_path) as mock_uninstall,
+        patch(
+            "local_transcriber.cli.uninstall_context_menu", return_value=cmd_path
+        ) as mock_uninstall,
         patch("local_transcriber.cli.load_config") as mock_load_config,
         patch("local_transcriber.cli.sys") as mock_sys,
     ):
@@ -1079,7 +1590,10 @@ def test_cli_menu_flags_available_only_on_windows():
 
 def test_cli_menu_runtime_error_has_no_verbose_hint():
     with (
-        patch("local_transcriber.cli.install_context_menu", side_effect=RuntimeError("нет APPDATA")),
+        patch(
+            "local_transcriber.cli.install_context_menu",
+            side_effect=RuntimeError("нет APPDATA"),
+        ),
         patch("local_transcriber.cli.sys") as mock_sys,
     ):
         mock_sys.platform = "win32"
@@ -1169,7 +1683,10 @@ def test_cli_quality_warning_batch_includes_file_name(tmp_path):
         patch("local_transcriber.cli.load_config", return_value={}),
         patch("local_transcriber.cli.validate_input_file", side_effect=lambda p: p),
         patch("local_transcriber.cli.detect_device", return_value="cpu"),
-        patch("local_transcriber.cli.load_model", return_value=(model, "cpu", backend, "/models/medium")),
+        patch(
+            "local_transcriber.cli.load_model",
+            return_value=(model, "cpu", backend, "/models/medium"),
+        ),
         patch("local_transcriber.cli._transcribe_file", side_effect=[tfr_warn, tfr_ok]),
         patch("local_transcriber.cli.write_transcript"),
         patch("local_transcriber.cli.console", Console(stderr=True, width=1000)),
@@ -1178,8 +1695,7 @@ def test_cli_quality_warning_batch_includes_file_name(tmp_path):
 
     assert out.exit_code == 0
     assert (
-        "  a.mp3: транскрипт покрывает 01:00 из 10:00 — "
-        "возможна потеря хвоста записи"
+        "  a.mp3: транскрипт покрывает 01:00 из 10:00 — возможна потеря хвоста записи"
     ) in out.output
 
 

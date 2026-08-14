@@ -1,5 +1,4 @@
 from datetime import datetime
-from pathlib import Path
 
 from local_transcriber.formatter import (
     LANGUAGE_DETECTED,
@@ -11,7 +10,12 @@ from local_transcriber.formatter import (
     write_transcript,
 )
 from local_transcriber.transcriber import Segment, TranscribeResult
-from local_transcriber.types import UNKNOWN_LANGUAGE
+from local_transcriber.types import (
+    UNKNOWN_LANGUAGE,
+    SmallSpeakerCluster,
+    SpeakerTranscript,
+    SpeakerTurn,
+)
 
 
 def test_format_timestamp_minutes():
@@ -57,6 +61,118 @@ def test_format_transcript_basic():
     assert "---" in content
     # Соседние сегменты без паузы объединяются в один абзац
     assert "[00:00.00 - 00:09.15] Добрый день, коллеги. Первый вопрос." in content
+
+
+def test_format_transcript_speaker_turns_use_truncated_start_timestamps():
+    result = TranscribeResult(
+        segments=[Segment(start=547.96, end=560.0, text=" Обычный текст")],
+        language="ru",
+        language_probability=0.97,
+        duration=700.0,
+        device_used="cpu",
+    )
+    speakers = SpeakerTranscript(
+        turns=[
+            SpeakerTurn(547.96, 550.0, "Первая реплика.", 1),
+            SpeakerTurn(558.4, 560.0, "Ответ.", 2),
+        ],
+        cluster_count=2,
+        unassigned_word_count=0,
+        small_clusters=[],
+    )
+
+    content = format_transcript(
+        result,
+        source_filename="meeting.mp4",
+        model_name="medium",
+        device_info="CPU",
+        language_mode=LANGUAGE_DETECTED,
+        speaker_transcript=speakers,
+    )
+
+    assert "- **Голосовых кластеров**: 2" in content
+    assert "[09:07] Speaker 1: Первая реплика." in content
+    assert "[09:18] Speaker 2: Ответ." in content
+    assert "[09:07.96 -" not in content
+
+
+def test_format_transcript_speaker_turns_use_hours_after_one_hour():
+    result = TranscribeResult(
+        segments=[Segment(start=3661.9, end=3663.0, text=" Длинная встреча")],
+        language="ru",
+        language_probability=1.0,
+        duration=3700.0,
+        device_used="cpu",
+    )
+    speakers = SpeakerTranscript(
+        turns=[SpeakerTurn(3661.9, 3663.0, "Длинная встреча", 1)],
+        cluster_count=2,
+        unassigned_word_count=0,
+        small_clusters=[],
+    )
+
+    content = format_transcript(
+        result,
+        source_filename="meeting.mp4",
+        model_name="medium",
+        device_info="CPU",
+        language_mode=LANGUAGE_FORCED,
+        speaker_transcript=speakers,
+    )
+
+    assert "[01:01:01] Speaker 1: Длинная встреча" in content
+
+
+def test_format_transcript_reports_unknown_words_and_small_clusters():
+    result = TranscribeResult(
+        segments=[Segment(start=0.0, end=8.0, text=" Текст")],
+        language="ru",
+        language_probability=1.0,
+        duration=20.0,
+        device_used="cpu",
+    )
+    speakers = SpeakerTranscript(
+        turns=[SpeakerTurn(1.2, 2.0, "Неясная реплика.", None)],
+        cluster_count=2,
+        unassigned_word_count=3,
+        small_clusters=[SmallSpeakerCluster(speaker=2, duration=4.2)],
+    )
+
+    content = format_transcript(
+        result,
+        source_filename="meeting.mp4",
+        model_name="medium",
+        device_info="CPU",
+        language_mode=LANGUAGE_FORCED,
+        speaker_transcript=speakers,
+    )
+
+    assert "[00:01] Speaker ?: Неясная реплика." in content
+    assert "3 слов без назначенного говорящего" in content
+    assert "малый кластер Speaker 2: 4.2 с" in content
+
+
+def test_format_transcript_keeps_plain_body_with_diarization_warning():
+    result = TranscribeResult(
+        segments=[Segment(start=0.0, end=2.0, text=" Полезный текст.")],
+        language="ru",
+        language_probability=1.0,
+        duration=5.0,
+        device_used="cpu",
+    )
+
+    content = format_transcript(
+        result,
+        source_filename="meeting.mp4",
+        model_name="medium",
+        device_info="CPU",
+        language_mode=LANGUAGE_FORCED,
+        diarization_warning="Диаризация завершилась с ошибкой: boom",
+    )
+
+    assert "**Внимание**: Диаризация завершилась с ошибкой: boom" in content
+    assert "[00:00.00 - 00:02.00] Полезный текст." in content
+    assert "Speaker" not in content
 
 
 def test_format_transcript_unknown_language_without_placeholder():
