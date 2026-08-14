@@ -22,9 +22,9 @@ EMBEDDING = MODELS / "wespeaker_en_voxceleb_resnet34_LM.onnx"
 
 SAMPLE_RATE = 16_000
 
-# Настройки разведки 2026-08-12. Порог 0.9 дал верное число говорящих на
-# контрольной записи; на 0.5 из примеров sherpa-onnx получалось 29 вместо трёх.
-DISCOVERY_THRESHOLD = 0.9
+# Конфигурация, выбранная калибровкой 2026-08-14 на трёх записях.
+# На 0.5 из примеров sherpa-onnx получалось 29 говорящих вместо трёх.
+DISCOVERY_THRESHOLD = 0.89
 DEFAULT_THREADS = 8
 
 

@@ -74,7 +74,13 @@ def main(audio_path: str, threshold: float, threads: int) -> None:
             continue
         major = max(per_speaker, key=lambda k: per_speaker[k])
         rows.append(
-            (seg, major, per_speaker[major] / total, total - per_speaker[major], dict(per_speaker))
+            (
+                seg,
+                major,
+                per_speaker[major] / total,
+                total - per_speaker[major],
+                dict(per_speaker),
+            )
         )
 
     n = len(rows)
@@ -95,7 +101,9 @@ def main(audio_path: str, threshold: float, threads: int) -> None:
         (f"с чужой репликой (>={INTERJECTION_S:.0f} с)", lost),
         ("без говорящего вообще", unattributed),
     ):
-        print(f"  {label:<34} {len(group):4d}  {len(group) / n * 100:5.1f}%  {minutes(group):5.1f} мин")
+        print(
+            f"  {label:<34} {len(group):4d}  {len(group) / n * 100:5.1f}%  {minutes(group):5.1f} мин"
+        )
 
     print()
     for level in PURITY_LEVELS:
@@ -107,9 +115,12 @@ def main(audio_path: str, threshold: float, threads: int) -> None:
 
     print("\n" + "=" * 64)
     print("ХУДШИЕ 12 СЕГМЕНТОВ (больше всего чужой речи внутри):")
-    for seg, major, purity, others, per_speaker in sorted(attributed, key=lambda r: -r[3])[:12]:
+    for seg, major, purity, others, per_speaker in sorted(
+        attributed, key=lambda r: -r[3]
+    )[:12]:
         share = ", ".join(
-            f"spk{k}={v:.1f}с" for k, v in sorted(per_speaker.items(), key=lambda x: -x[1])
+            f"spk{k}={v:.1f}с"
+            for k, v in sorted(per_speaker.items(), key=lambda x: -x[1])
         )
         print(
             f"\n  [{seg.start:7.1f}-{seg.end:7.1f}] ({seg.end - seg.start:4.1f} с) "

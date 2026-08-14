@@ -41,17 +41,18 @@ curl -sSL -O https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-rec
 export PYTHONIOENCODING=utf-8
 
 uv run python .scratch/diarization/bench_asr.py "<путь к записи>"
-uv run --with sherpa-onnx python .scratch/diarization/bench_diar.py "<путь>" 8 0.9
+uv run --with sherpa-onnx python .scratch/diarization/bench_diar.py "<путь>" 8 0.89
 uv run --with sherpa-onnx python .scratch/diarization/bench_sweep.py "<путь>"
 uv run --with sherpa-onnx python .scratch/diarization/bench_conflict.py "<путь>"
 ```
 
 ## Что стоит знать до запуска
 
-- **Порог кластеризации не откалиброван.** По умолчанию стоит 0,9 — значение из
-  разведки, подобранное на одной записи и на ней же проверенное. На пороге 0,5
-  из примеров sherpa-onnx получалось 29 говорящих вместо трёх. Калибровка — это
-  тикет #10, до его закрытия любое значение считается временным.
+- **Порог кластеризации откалиброван.** По умолчанию стоит 0,89 — единственное
+  проверенное значение, которое без знания числа участников дало правильные
+  3 / 2 / 2 кластера на трёх калибровочных фрагментах. Решение и ограничения
+  описаны в
+  [отчёте о калибровке](../../docs/benchmarks/2026-08-14-diarization-calibration.md).
 - **Свип дорогой.** Каждая конфигурация — полный прогон сегментации и
   эмбеддингов, около 2,5 минут на 26-минутную запись, и время от настроек
   кластеризации практически не зависит. Свип вести на коротком фрагменте.
