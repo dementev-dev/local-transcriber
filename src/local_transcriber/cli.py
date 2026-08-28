@@ -92,6 +92,8 @@ def _format_device_info(device_used: str) -> str:
         return f"OpenVINO ({gpu_name or 'Intel GPU'})"
     if device_used in ("openvino", "openvino-cpu"):
         return "OpenVINO (CPU)"
+    if device_used == "onnx":
+        return "ONNX (CPU)"
     return "CPU"
 
 

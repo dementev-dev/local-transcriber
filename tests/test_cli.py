@@ -193,6 +193,30 @@ def test_cli_default_options_passed_to_transcribe(tmp_path):
     assert "Устройство: onnx" in out.output
 
 
+def test_cli_identifies_onnx_backend_in_transcript_header(tmp_path):
+    audio = tmp_path / "test.mp3"
+    audio.write_bytes(b"fake")
+    result = _make_result(device_used="onnx")
+    model = _make_model()
+    backend = _make_backend()
+    tfr = _make_tfr(result=result, model=model, actual_device="onnx", backend=backend)
+
+    with (
+        patch("local_transcriber.cli.load_config", return_value={}),
+        patch("local_transcriber.cli.detect_device", return_value="onnx"),
+        patch(
+            "local_transcriber.cli.load_model",
+            return_value=(model, "onnx", backend, "/models/gigaam-v3-e2e-rnnt"),
+        ),
+        patch("local_transcriber.cli._transcribe_file", return_value=tfr),
+    ):
+        out = runner.invoke(app, [str(audio)])
+
+    content = (tmp_path / "test-transcript.md").read_text(encoding="utf-8")
+    assert out.exit_code == 0
+    assert "- **Устройство**: ONNX (CPU)" in content
+
+
 def test_cli_custom_options(tmp_path):
     audio = tmp_path / "test.mp3"
     audio.write_bytes(b"fake")
@@ -1424,7 +1448,8 @@ def test_format_device_info_openvino_legacy():
     assert _format_device_info("openvino") == "OpenVINO (CPU)"
 
 
-def test_format_device_info_cpu():
+def test_format_device_info_distinguishes_onnx_from_faster_whisper_cpu():
+    assert _format_device_info("onnx") == "ONNX (CPU)"
     assert _format_device_info("cpu") == "CPU"
 
 
