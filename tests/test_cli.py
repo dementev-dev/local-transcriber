@@ -1,3 +1,4 @@
+import warnings
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -116,6 +117,49 @@ def test_cli_happy_path_exit_code_zero(tmp_path):
         out = runner.invoke(app, [str(audio)])
 
     assert out.exit_code == 0
+
+
+@pytest.mark.parametrize("file_count", [1, 2])
+def test_cli_renders_runtime_warning_without_python_details(tmp_path, file_count):
+    files = [tmp_path / f"test-{index}.mp3" for index in range(file_count)]
+    for file in files:
+        file.write_bytes(b"fake")
+
+    result = _make_result()
+    model = _make_model()
+    backend = _make_backend()
+    tfr = _make_tfr(result=result, model=model, backend=backend)
+    warning_message = (
+        "Тестовое [bold]предупреждение[/bold] с длинным текстом, который "
+        "должен остаться одной логической строкой без служебных подробностей Python"
+    )
+
+    def transcribe_with_warning(**_kwargs):
+        warnings.warn(warning_message, stacklevel=2)
+        return tfr
+
+    original_showwarning = warnings.showwarning
+    with (
+        patch("local_transcriber.cli.load_config", return_value={}),
+        patch("local_transcriber.cli.validate_input_file", side_effect=lambda p: p),
+        patch("local_transcriber.cli.detect_device", return_value="cpu"),
+        patch(
+            "local_transcriber.cli.load_model",
+            return_value=(model, "cpu", backend, "/models/medium"),
+        ),
+        patch(
+            "local_transcriber.cli._transcribe_file",
+            side_effect=transcribe_with_warning,
+        ),
+        patch("local_transcriber.cli.write_transcript"),
+    ):
+        out = runner.invoke(app, [str(file) for file in files])
+
+    warning_lines = [line for line in out.output.splitlines() if "Тестовое" in line]
+    assert warning_lines == [f"Внимание: {warning_message}"]
+    assert "UserWarning" not in out.output
+    assert "warnings.warn" not in out.output
+    assert warnings.showwarning is original_showwarning
 
 
 def test_cli_default_options_passed_to_transcribe(tmp_path):
