@@ -2,6 +2,9 @@
 
 import sys
 import time
+import warnings
+from collections.abc import Callable
+from functools import wraps
 from pathlib import Path
 
 import typer
@@ -56,6 +59,29 @@ app = typer.Typer()
 console = Console(stderr=True)
 
 
+def _show_cli_warning(
+    message: Warning | str,
+    *_args: object,
+    **_kwargs: object,
+) -> None:
+    """Печатает предупреждение в пользовательском формате CLI."""
+    console.print(f"Внимание: {message}", style="yellow", soft_wrap=True, markup=False)
+
+
+def _with_cli_warning_renderer(
+    command: Callable[..., None],
+) -> Callable[..., None]:
+    """Устанавливает CLI-рендер предупреждений на время одного запуска."""
+
+    @wraps(command)
+    def wrapped(*args: object, **kwargs: object) -> None:
+        with warnings.catch_warnings():
+            warnings.showwarning = _show_cli_warning
+            command(*args, **kwargs)
+
+    return wrapped
+
+
 def _format_device_info(device_used: str) -> str:
     """Формирует строку устройства для шапки транскрипта."""
     if device_used == "cuda":
@@ -66,6 +92,8 @@ def _format_device_info(device_used: str) -> str:
         return f"OpenVINO ({gpu_name or 'Intel GPU'})"
     if device_used in ("openvino", "openvino-cpu"):
         return "OpenVINO (CPU)"
+    if device_used == "onnx":
+        return "ONNX (CPU)"
     return "CPU"
 
 
@@ -193,6 +221,7 @@ def _print_diarization_report(
 
 
 @app.command()
+@_with_cli_warning_renderer
 def main(
     files: list[Path] | None = typer.Argument(None, help="Пути к аудио/видеофайлам"),
     model: str | None = typer.Option(

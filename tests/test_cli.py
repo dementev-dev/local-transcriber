@@ -1,3 +1,4 @@
+import warnings
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -118,6 +119,49 @@ def test_cli_happy_path_exit_code_zero(tmp_path):
     assert out.exit_code == 0
 
 
+@pytest.mark.parametrize("file_count", [1, 2])
+def test_cli_renders_runtime_warning_without_python_details(tmp_path, file_count):
+    files = [tmp_path / f"test-{index}.mp3" for index in range(file_count)]
+    for file in files:
+        file.write_bytes(b"fake")
+
+    result = _make_result()
+    model = _make_model()
+    backend = _make_backend()
+    tfr = _make_tfr(result=result, model=model, backend=backend)
+    warning_message = (
+        "Тестовое [bold]предупреждение[/bold] с длинным текстом, который "
+        "должен остаться одной логической строкой без служебных подробностей Python"
+    )
+
+    def transcribe_with_warning(**_kwargs):
+        warnings.warn(warning_message, stacklevel=2)
+        return tfr
+
+    original_showwarning = warnings.showwarning
+    with (
+        patch("local_transcriber.cli.load_config", return_value={}),
+        patch("local_transcriber.cli.validate_input_file", side_effect=lambda p: p),
+        patch("local_transcriber.cli.detect_device", return_value="cpu"),
+        patch(
+            "local_transcriber.cli.load_model",
+            return_value=(model, "cpu", backend, "/models/medium"),
+        ),
+        patch(
+            "local_transcriber.cli._transcribe_file",
+            side_effect=transcribe_with_warning,
+        ),
+        patch("local_transcriber.cli.write_transcript"),
+    ):
+        out = runner.invoke(app, [str(file) for file in files])
+
+    warning_lines = [line for line in out.output.splitlines() if "Тестовое" in line]
+    assert warning_lines == [f"Внимание: {warning_message}"]
+    assert "UserWarning" not in out.output
+    assert "warnings.warn" not in out.output
+    assert warnings.showwarning is original_showwarning
+
+
 def test_cli_default_options_passed_to_transcribe(tmp_path):
     audio = tmp_path / "test.mp3"
     audio.write_bytes(b"fake")
@@ -147,6 +191,30 @@ def test_cli_default_options_passed_to_transcribe(tmp_path):
     assert call_kwargs["on_segment"] is None  # verbose=False
     assert "Модель: gigaam-v3-e2e-rnnt" in out.output
     assert "Устройство: onnx" in out.output
+
+
+def test_cli_identifies_onnx_backend_in_transcript_header(tmp_path):
+    audio = tmp_path / "test.mp3"
+    audio.write_bytes(b"fake")
+    result = _make_result(device_used="onnx")
+    model = _make_model()
+    backend = _make_backend()
+    tfr = _make_tfr(result=result, model=model, actual_device="onnx", backend=backend)
+
+    with (
+        patch("local_transcriber.cli.load_config", return_value={}),
+        patch("local_transcriber.cli.detect_device", return_value="onnx"),
+        patch(
+            "local_transcriber.cli.load_model",
+            return_value=(model, "onnx", backend, "/models/gigaam-v3-e2e-rnnt"),
+        ),
+        patch("local_transcriber.cli._transcribe_file", return_value=tfr),
+    ):
+        out = runner.invoke(app, [str(audio)])
+
+    content = (tmp_path / "test-transcript.md").read_text(encoding="utf-8")
+    assert out.exit_code == 0
+    assert "- **Устройство**: ONNX (CPU)" in content
 
 
 def test_cli_custom_options(tmp_path):
@@ -1380,7 +1448,8 @@ def test_format_device_info_openvino_legacy():
     assert _format_device_info("openvino") == "OpenVINO (CPU)"
 
 
-def test_format_device_info_cpu():
+def test_format_device_info_distinguishes_onnx_from_faster_whisper_cpu():
+    assert _format_device_info("onnx") == "ONNX (CPU)"
     assert _format_device_info("cpu") == "CPU"
 
 
