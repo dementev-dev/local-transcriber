@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import importlib.metadata
 import itertools
@@ -24,6 +25,7 @@ from tempfile import NamedTemporaryFile
 from typing import Any
 
 SCHEMA_VERSION = 2
+EXPECTED_SHERPA_ONNX_VERSION = "1.13.5"
 SAMPLE_RATE = 16_000
 SAMPLE_WIDTH_BYTES = 2
 CHANNELS = 1
@@ -129,24 +131,73 @@ class PeakRssSampler:
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--manifest", type=Path)
-    parser.add_argument("--output", type=Path)
-    parser.add_argument("--work-dir", type=Path)
+    parser = argparse.ArgumentParser(
+        description=(
+            "Проверяет и запускает воспроизводимый CPU-benchmark из issue #25. "
+            "Приватные пути и результаты остаются вне Git."
+        ),
+        epilog=(
+            "Сначала выполните --validate-only. Полный запуск атомарно сохраняет "
+            "каждую ячейку и продолжает совместимый output после прерывания."
+        ),
+    )
+    parser.add_argument(
+        "--manifest",
+        type=Path,
+        help="manifest v2; относительные пути считаются от его каталога",
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        help="приватный JSON результата; существующий совместимый файл продолжится",
+    )
+    parser.add_argument(
+        "--work-dir",
+        type=Path,
+        help="каталог декодированных WAV и запросов дочерним процессам",
+    )
     # Оставлено для воспроизводимости старых команд; значение входит в experiment_id.
-    parser.add_argument("--threads", type=int)
-    parser.add_argument("--prepare-asr", metavar="RECORDING_ID")
-    parser.add_argument("--asr-model")
-    parser.add_argument("--asr-device")
-    parser.add_argument("--asr-compute-type")
-    parser.add_argument("--asr-language")
+    parser.add_argument(
+        "--threads",
+        type=int,
+        help="число потоков; если задано, должно совпасть с manifest.threads",
+    )
+    parser.add_argument(
+        "--validate-only",
+        action="store_true",
+        help="проверить файлы, корпус и матрицу без декодирования и запуска моделей",
+    )
+    parser.add_argument(
+        "--prepare-asr",
+        metavar="RECORDING_ID",
+        help="создать ASR-sidecar одной записи и вывести его SHA-256",
+    )
+    parser.add_argument("--asr-model", help="production ASR-модель для --prepare-asr")
+    parser.add_argument("--asr-device", help="устройство ASR для --prepare-asr")
+    parser.add_argument("--asr-compute-type", help="точность ASR для --prepare-asr")
+    parser.add_argument("--asr-language", help="язык ASR для --prepare-asr")
     parser.add_argument("--worker", type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     if args.worker is None:
-        missing = [
-            name for name in ("manifest", "work_dir") if getattr(args, name) is None
-        ]
-        if args.prepare_asr is None and args.output is None:
+        validate_only_conflicts = (
+            "output",
+            "work_dir",
+            "prepare_asr",
+            "asr_model",
+            "asr_device",
+            "asr_compute_type",
+            "asr_language",
+        )
+        if args.validate_only and any(
+            getattr(args, name) is not None for name in validate_only_conflicts
+        ):
+            parser.error(
+                "--validate-only нельзя сочетать с параметрами запуска или подготовки ASR"
+            )
+        missing = ["manifest"] if args.manifest is None else []
+        if not args.validate_only and args.work_dir is None:
+            missing.append("work_dir")
+        if not args.validate_only and args.prepare_asr is None and args.output is None:
             missing.append("output")
         if missing:
             parser.error("обязательные параметры: " + ", ".join(missing))
@@ -164,6 +215,29 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             if asr_missing:
                 parser.error("для --prepare-asr нужны: " + ", ".join(asr_missing))
     return args
+
+
+def resolve_manifest_paths(
+    manifest: dict[str, Any], manifest_dir: Path
+) -> dict[str, Any]:
+    """Разрешает приватные относительные пути от каталога manifest."""
+    result = copy.deepcopy(manifest)
+    base = manifest_dir.resolve()
+
+    def resolve(value: str) -> str:
+        path = Path(value)
+        return str(path if path.is_absolute() else (base / path).resolve())
+
+    for model in result["segmentation_models"]:
+        model["path"] = resolve(model["path"])
+    for model in result["embedding_models"]:
+        model["path"] = resolve(model["path"])
+    for recording in result["recordings"]:
+        recording["path"] = resolve(recording["path"])
+        if recording["reference"] is not None:
+            recording["reference"]["path"] = resolve(recording["reference"]["path"])
+        recording["asr_words"]["path"] = resolve(recording["asr_words"]["path"])
+    return result
 
 
 def file_sha256(path: Path) -> str:
@@ -461,7 +535,29 @@ def environment_snapshot() -> dict[str, Any]:
         "sherpa_onnx_version": version("sherpa-onnx"),
         "onnxruntime_version": version("onnxruntime"),
         "numpy_version": version("numpy"),
+        "psutil_version": version("psutil"),
     }
+
+
+def validate_environment(environment: dict[str, Any]) -> None:
+    """Отсекает окружение, которое заведомо испортит дорогой прогон."""
+    missing = [
+        key
+        for key in (
+            "sherpa_onnx_version",
+            "onnxruntime_version",
+            "numpy_version",
+            "psutil_version",
+        )
+        if environment.get(key) == "unavailable"
+    ]
+    if missing:
+        raise RuntimeError(f"Не установлены зависимости benchmark: {missing}")
+    if environment.get("sherpa_onnx_version") != EXPECTED_SHERPA_ONNX_VERSION:
+        raise RuntimeError(
+            "Stage timing поддержан только для sherpa-onnx "
+            f"{EXPECTED_SHERPA_ONNX_VERSION}"
+        )
 
 
 def semantic_manifest(
@@ -652,7 +748,7 @@ def select_threshold(
 
 def parse_stage_timings(stderr: str, sherpa_version: str) -> dict[str, float]:
     """Строго разбирает недокументированный debug-контракт sherpa 1.13.5."""
-    if sherpa_version != "1.13.5":
+    if sherpa_version != EXPECTED_SHERPA_ONNX_VERSION:
         raise ValueError(
             f"Неизвестный формат stage timing sherpa-onnx {sherpa_version}"
         )
@@ -1411,12 +1507,40 @@ def _prepare_asr(args: argparse.Namespace, manifest: dict[str, Any]) -> None:
     print(digest)
 
 
+def validation_summary(
+    manifest: dict[str, Any], environment: dict[str, Any]
+) -> dict[str, Any]:
+    """Возвращает безопасный план без приватных путей и текста."""
+    experiment_id = make_experiment_id(manifest, environment)
+    return {
+        "status": "valid",
+        "experiment_id": experiment_id,
+        "recordings": [item["id"] for item in manifest["recordings"]],
+        "combinations": [item["id"] for item in manifest["combinations"]],
+        "automatic_cells": len(expand_automatic_cells(manifest, experiment_id)),
+        "known_cells_if_all_selected": len(manifest["recordings"])
+        * len(manifest["combinations"]),
+        "threads": manifest["threads"],
+        "dependencies": {
+            key: environment[key]
+            for key in (
+                "sherpa_onnx_version",
+                "onnxruntime_version",
+                "numpy_version",
+                "psutil_version",
+            )
+        },
+    }
+
+
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     if args.worker is not None:
         _worker_main(args.worker)
         return
-    manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
+    raw_manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
+    validate_manifest(raw_manifest, verify_files=False)
+    manifest = resolve_manifest_paths(raw_manifest, args.manifest.parent)
     if args.threads is not None:
         if args.threads <= 0:
             raise ValueError("--threads должен быть положительным")
@@ -1427,8 +1551,18 @@ def main(argv: list[str] | None = None) -> None:
         return
     validate_manifest(manifest)
     validate_original_corpus(manifest)
-    args.work_dir.mkdir(parents=True, exist_ok=True)
     environment = environment_snapshot()
+    validate_environment(environment)
+    if args.validate_only:
+        print(
+            json.dumps(
+                validation_summary(manifest, environment),
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return
+    args.work_dir.mkdir(parents=True, exist_ok=True)
     experiment_id = make_experiment_id(manifest, environment)
     output = _load_or_create_output(args.output, manifest, environment, experiment_id)
     decoded = {

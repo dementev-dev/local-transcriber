@@ -140,7 +140,86 @@ def _environment():
         "sherpa_onnx_version": "1.13.5",
         "onnxruntime_version": "1",
         "numpy_version": "2",
+        "psutil_version": "7",
     }
+
+
+def test_validate_only_requires_only_manifest():
+    args = calibration.parse_args(["--manifest", "manifest.json", "--validate-only"])
+
+    assert args.manifest == Path("manifest.json")
+    assert args.output is None
+    assert args.work_dir is None
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        ["--output", "unused"],
+        ["--work-dir", "unused"],
+        ["--prepare-asr", "data-test"],
+        ["--asr-model", "model"],
+        ["--asr-device", "cpu"],
+        ["--asr-compute-type", "float32"],
+        ["--asr-language", "ru"],
+    ],
+)
+def test_validate_only_rejects_unused_run_options(extra):
+    with pytest.raises(SystemExit):
+        calibration.parse_args(
+            ["--manifest", "manifest.json", "--validate-only", *extra]
+        )
+
+
+def test_relative_manifest_paths_resolve_from_manifest_directory(tmp_path):
+    manifest = _manifest(tmp_path)
+    for model in manifest["segmentation_models"] + manifest["embedding_models"]:
+        model["path"] = Path(model["path"]).name
+    for recording in manifest["recordings"]:
+        recording["path"] = Path(recording["path"]).name
+        recording["asr_words"]["path"] = Path(recording["asr_words"]["path"]).name
+        if recording["reference"] is not None:
+            recording["reference"]["path"] = Path(recording["reference"]["path"]).name
+
+    resolved = calibration.resolve_manifest_paths(manifest, tmp_path)
+
+    assert calibration.validate_manifest(resolved)["schema_version"] == 2
+    assert Path(resolved["recordings"][0]["path"]).is_absolute()
+
+
+def test_validate_only_prints_safe_plan(tmp_path, monkeypatch, capsys):
+    manifest_path = tmp_path / "manifest.json"
+    manifest = _manifest(tmp_path)
+    for model in manifest["segmentation_models"] + manifest["embedding_models"]:
+        model["path"] = Path(model["path"]).name
+    for recording in manifest["recordings"]:
+        recording["path"] = Path(recording["path"]).name
+        recording["asr_words"]["path"] = Path(recording["asr_words"]["path"]).name
+        if recording["reference"] is not None:
+            recording["reference"]["path"] = Path(recording["reference"]["path"]).name
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    monkeypatch.setattr(calibration, "validate_original_corpus", lambda manifest: None)
+    monkeypatch.setattr(calibration, "environment_snapshot", _environment)
+
+    calibration.main(["--manifest", str(manifest_path), "--validate-only"])
+
+    summary = json.loads(capsys.readouterr().out)
+    assert summary["status"] == "valid"
+    assert summary["automatic_cells"] == 15
+    assert summary["known_cells_if_all_selected"] == 12
+    assert str(tmp_path) not in json.dumps(summary)
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [("sherpa_onnx_version", "1.14.0"), ("psutil_version", "unavailable")],
+)
+def test_validate_environment_rejects_incompatible_dependencies(key, value):
+    environment = _environment()
+    environment[key] = value
+
+    with pytest.raises(RuntimeError):
+        calibration.validate_environment(environment)
 
 
 def _complete_cell(spec, clusters, purity=None, residual=0.0):
