@@ -7,15 +7,17 @@
 ## Вопрос и ответ
 
 Первый опубликованный релиз, в котором `window_shift_ratio` доступен из
-готового Python wheel для offline speaker diarization, - **sherpa-onnx 1.13.6**
+готового Python wheel для offline speaker diarization: **sherpa-onnx 1.13.6**
 от 18 августа 2026 года. В нем параметр входит в публичный Python-конструктор
 `OfflineSpeakerSegmentationPyannoteModelConfig` и доступен как изменяемое поле.
 Это подтверждают [binding тега
-v1.13.6](https://github.com/k2-fsa/sherpa-onnx/blob/v1.13.6/sherpa-onnx/python/csrc/offline-speaker-diarization.cc#L45-L54),
+v1.13.6](https://github.com/k2-fsa/sherpa-onnx/blob/v1.13.6/sherpa-onnx/python/csrc/offline-speaker-diarization.cc#L50-L59),
 [пример Python API](https://github.com/k2-fsa/sherpa-onnx/blob/v1.13.6/python-api-examples/offline-speaker-diarization.py#L62-L80)
 и [состав релиза](https://github.com/k2-fsa/sherpa-onnx/releases/tag/v1.13.6).
 Готовые wheels появились на PyPI в тот же день
-([метаданные 1.13.6](https://pypi.org/pypi/sherpa-onnx/1.13.6/json)).
+([метаданные 1.13.6](https://pypi.org/pypi/sherpa-onnx/1.13.6/json)). На дату
+исследования 1.13.6 также остается [текущей версией пакета на
+PyPI](https://pypi.org/pypi/sherpa-onnx/json).
 
 С 1.13.5 можно перейти **обычным обновлением до 1.13.6**. Частный binding,
 backport и новый запрос upstream не нужны: нужный follow-up уже принят и
@@ -27,12 +29,12 @@ backport и новый запрос upstream не нужны: нужный follo
 |---|---|
 | До 23.07.2026 | Шаг был зашит в C++ как 10% окна. Это исходная проблема, описанная upstream в [PR #3769](https://github.com/k2-fsa/sherpa-onnx/pull/3769). |
 | 23.07.2026, commit [`797e6e9`](https://github.com/k2-fsa/sherpa-onnx/commit/797e6e9) | `window_shift_ratio` добавлен в C++-ядро и CLI. Допустимый диапазон: `(0, 1]`, значение по умолчанию: `0,1`. C API и языковые binding намеренно оставлены для follow-up ([PR #3769](https://github.com/k2-fsa/sherpa-onnx/pull/3769)). |
-| 11.08.2026, v1.13.5 | Первый релиз C++-ядра и CLI с параметром ([release notes](https://github.com/k2-fsa/sherpa-onnx/releases/tag/v1.13.5)). Python binding этой версии принимает только `model` и не экспортирует поле ([исходник v1.13.5](https://github.com/k2-fsa/sherpa-onnx/blob/v1.13.5/sherpa-onnx/python/csrc/offline-speaker-diarization.cc#L45-L52)). |
+| 11.08.2026, v1.13.5 | Первый релиз C++-ядра и CLI с параметром ([release notes](https://github.com/k2-fsa/sherpa-onnx/releases/tag/v1.13.5)). Python binding этой версии принимает только `model` и не экспортирует поле ([исходник v1.13.5](https://github.com/k2-fsa/sherpa-onnx/blob/v1.13.5/sherpa-onnx/python/csrc/offline-speaker-diarization.cc#L50-L57)). |
 | 13.08.2026, commit [`3e40933`](https://github.com/k2-fsa/sherpa-onnx/commit/3e409338959097c6518998c9b72757db257f5f6f) | Параметр проведен через публичные C/CXX API и языковые binding, включая Python; PR #3870 принят upstream ([описание и мотивировка](https://github.com/k2-fsa/sherpa-onnx/pull/3870)). |
 | 18.08.2026, v1.13.6 | Первый релиз с публичным Python API. На PyPI есть cp313 и cp314 wheels без отметки yanked для всех платформ проекта ([release](https://github.com/k2-fsa/sherpa-onnx/releases/tag/v1.13.6), [PyPI JSON](https://pypi.org/pypi/sherpa-onnx/1.13.6/json)). |
 
-Граница проходит между двумя релизами: **1.13.5** дает C++-ядро и CLI,
-**1.13.6** - C, CXX wrapper, Python и остальные binding.
+Граница проходит между двумя релизами: **1.13.5** дает C++-ядро и CLI, а в
+**1.13.6** доступны C, CXX wrapper, Python и остальные binding.
 
 ## Публичный контракт 1.13.6
 
@@ -45,17 +47,17 @@ pyannote = sherpa_onnx.OfflineSpeakerSegmentationPyannoteModelConfig(
 )
 ```
 
-Конструктор имеет сигнатуру `(model, window_shift_ratio=0.1)`, а объект - поле
-`.window_shift_ratio`. Прежний вызов только с `model` остается допустимым и
-сохраняет прежнее поведение
-([binding](https://github.com/k2-fsa/sherpa-onnx/blob/v1.13.6/sherpa-onnx/python/csrc/offline-speaker-diarization.cc#L45-L54)).
+Конструктор имеет сигнатуру `(model, window_shift_ratio=0.1)`. Объект
+предоставляет изменяемое поле `.window_shift_ratio`. Прежний вызов только с
+`model` остается допустимым и сохраняет прежнее поведение
+([binding](https://github.com/k2-fsa/sherpa-onnx/blob/v1.13.6/sherpa-onnx/python/csrc/offline-speaker-diarization.cc#L50-L59)).
 Нативная валидация принимает только `(0, 1]`; ноль в Python не включает default
-([конфигурация ядра](https://github.com/k2-fsa/sherpa-onnx/blob/v1.13.6/sherpa-onnx/csrc/offline-speaker-segmentation-pyannote-model-config.cc)).
+([конфигурация ядра](https://github.com/k2-fsa/sherpa-onnx/blob/v1.13.6/sherpa-onnx/csrc/offline-speaker-segmentation-pyannote-model-config.cc#L24-L39)).
 
 Параметр читается при создании segmentation-модели. Метод
 `OfflineSpeakerDiarization.set_config()` обновляет только clustering, поэтому
 для каждой точки сетки нужен новый diarizer
-([реализация](https://github.com/k2-fsa/sherpa-onnx/blob/v1.13.6/sherpa-onnx/csrc/offline-speaker-diarization-pyannote-impl.h#L79-L86)).
+([реализация](https://github.com/k2-fsa/sherpa-onnx/blob/v1.13.6/sherpa-onnx/csrc/offline-speaker-diarization-pyannote-impl.h#L87-L94)).
 
 ### C и C++
 
@@ -64,10 +66,10 @@ pyannote = sherpa_onnx.OfflineSpeakerSegmentationPyannoteModelConfig(
   Значение должно лежать в `(0, 1]`; только C-конвертер трактует `<= 0` как
   незаданное и подставляет `0,1`, чтобы не сломать вызывающий код с
   zero-initialized struct
-  ([C header](https://github.com/k2-fsa/sherpa-onnx/blob/v1.13.6/sherpa-onnx/c-api/c-api.h#L3597-L3611),
-  [конвертер](https://github.com/k2-fsa/sherpa-onnx/blob/v1.13.6/sherpa-onnx/c-api/c-api.cc#L2912-L2922)).
+  ([C header](https://github.com/k2-fsa/sherpa-onnx/blob/v1.13.6/sherpa-onnx/c-api/c-api.h#L3839-L3846),
+  [конвертер](https://github.com/k2-fsa/sherpa-onnx/blob/v1.13.6/sherpa-onnx/c-api/c-api.cc#L3145-L3156)).
 - Публичный CXX wrapper получил поле `float window_shift_ratio = 0.1f`
-  ([cxx-api.h](https://github.com/k2-fsa/sherpa-onnx/blob/v1.13.6/sherpa-onnx/c-api/cxx-api.h#L1770-L1790)).
+  ([cxx-api.h](https://github.com/k2-fsa/sherpa-onnx/blob/v1.13.6/sherpa-onnx/c-api/cxx-api.h#L1911-L1917)).
 - Внутренний C++-контракт ядра существовал уже в 1.13.5, но не давал
   приложению на Python поддерживаемого пути. Подменять им binding больше нет
   смысла.
@@ -88,13 +90,19 @@ pyannote = sherpa_onnx.OfflineSpeakerSegmentationPyannoteModelConfig(
 | CPython 3.13/3.14, macOS x86-64 | `macosx_10_15_x86_64` или `universal2` | те же platform tags | Готовый комплект есть; macOS в проекте не проходил ручную приемку |
 | CPython 3.13/3.14, macOS ARM64 | `macosx_11_0_arm64` или `universal2` | те же platform tags | Готовый комплект есть; macOS в проекте не проходил ручную приемку |
 
-Источник файлов основной поставки - [PyPI 1.13.6
-JSON](https://pypi.org/pypi/sherpa-onnx/1.13.6/json), нативной части -
+Linux-поставка рассчитана на glibc 2.17 и новее: `musllinux` wheels в релизе
+нет. Поэтому таблица не подтверждает готовую бинарную установку на Alpine или
+другом Linux с musl.
+
+Источник файлов основной поставки: [PyPI 1.13.6
+JSON](https://pypi.org/pypi/sherpa-onnx/1.13.6/json), нативной части:
 [PyPI core 1.13.6 JSON](https://pypi.org/pypi/sherpa-onnx-core/1.13.6/json).
 Метаданные основного пакета объявляют `Requires-Python >=3.7` и единственную
 зависимость `sherpa-onnx-core==1.13.6`; core дополнительных `Requires-Dist` не
 объявляет. Универсального `abi3` wheel нет: при сохранении открытой границы
-Python `>=3.13` будущий CPython 3.15 потребует нового upstream wheel.
+Python `>=3.13` готовая бинарная установка на будущем CPython 3.15 потребует
+нового upstream wheel. Исходный архив опубликован, но локальная нативная сборка
+для 3.15 в это исследование не входила.
 
 Для обновления проекта нужно синхронно поменять три места: пин
 `sherpa-onnx==1.13.6`, uv override на `sherpa-onnx-core==1.13.6` и lock-файл.
@@ -118,9 +126,11 @@ Python-зависимостей между 1.13.5 и 1.13.6 нет
 - Остальные изменения 1.13.6 относятся к сборке Android/Java, SPM,
   Flutter/Dart и примерам VAD+ASR. Релиз не заявляет удаления Python API или
   смены формата моделей ([release notes](https://github.com/k2-fsa/sherpa-onnx/releases/tag/v1.13.6)).
-- Наличие wheel не заменяет smoke test нативной загрузки. Для проекта нужны
-  хотя бы Python 3.13 на Linux x86-64 и Windows x86-64. Для macOS подтверждена
-  только upstream-поставка.
+- Временное окружение CPython 3.13.14 на Linux x86-64 установило согласованную
+  пару `sherpa-onnx==1.13.6` и `sherpa-onnx-core==1.13.6`. Импорт и создание
+  конфигураций со всеми пятью значениями сетки прошли. Для Windows и macOS пока
+  подтверждена только upstream-поставка; при обновлении проекта нужен отдельный
+  smoke test Windows x86-64 и повтор Linux-проверки из lock-файла.
 
 ## Что именно меняет параметр
 
@@ -128,8 +138,8 @@ Python-зависимостей между 1.13.5 и 1.13.6 нет
 и при debug печатает фактическое значение. Затем запись режется на окна по этому
 шагу; для записи длиннее одного окна число segmentation-запусков равно
 `floor((n - W) / S) + 1` плюс одно дополненное нулями окно, если есть остаток
-([расчет шага](https://github.com/k2-fsa/sherpa-onnx/blob/v1.13.6/sherpa-onnx/csrc/offline-speaker-segmentation-pyannote-model.cc#L85-L108),
-[цикл окон](https://github.com/k2-fsa/sherpa-onnx/blob/v1.13.6/sherpa-onnx/csrc/offline-speaker-diarization-pyannote-impl.h#L256-L312)).
+([расчет шага](https://github.com/k2-fsa/sherpa-onnx/blob/v1.13.6/sherpa-onnx/csrc/offline-speaker-segmentation-pyannote-model.cc#L92-L123),
+[цикл окон](https://github.com/k2-fsa/sherpa-onnx/blob/v1.13.6/sherpa-onnx/csrc/offline-speaker-diarization-pyannote-impl.h#L278-L337)).
 
 Для Pyannote Segmentation 3.0 с окном `160000` сэмплов при 16 кГц сетка дает:
 
@@ -144,8 +154,8 @@ Python-зависимостей между 1.13.5 и 1.13.6 нет
 Это не прогноз полного ускорения. После segmentation движок создает отдельное
 задание embedding для каждой достаточно длинной пары `(окно, локальный
 говорящий)`. Их число зависит от речи и перекрытий
-([формирование пар и embedding](https://github.com/k2-fsa/sherpa-onnx/blob/v1.13.6/sherpa-onnx/csrc/offline-speaker-diarization-pyannote-impl.h#L376-L445),
-[цикл embedding](https://github.com/k2-fsa/sherpa-onnx/blob/v1.13.6/sherpa-onnx/csrc/offline-speaker-diarization-pyannote-impl.h#L469-L528)).
+([формирование пар](https://github.com/k2-fsa/sherpa-onnx/blob/v1.13.6/sherpa-onnx/csrc/offline-speaker-diarization-pyannote-impl.h#L408-L484),
+[цикл embedding](https://github.com/k2-fsa/sherpa-onnx/blob/v1.13.6/sherpa-onnx/csrc/offline-speaker-diarization-pyannote-impl.h#L510-L564)).
 Upstream получил на одном английском файле 1,48× при `0,15` и 2,00× при `0,20`,
 но сам ограничил вывод этим материалом; переносить коэффициенты на русские
 созвоны нельзя ([измерение в PR #3769](https://github.com/k2-fsa/sherpa-onnx/pull/3769)).
@@ -171,7 +181,7 @@ Upstream получил на одном английском файле 1,48× �
    - финальный `num_total_chunks` progress callback как число embedding-заданий.
      Название callback вводит в заблуждение: реализация вызывает его внутри
      цикла по `(окно, локальный говорящий)`. В segmentation-цикле вызова нет
-     ([исходник](https://github.com/k2-fsa/sherpa-onnx/blob/v1.13.6/sherpa-onnx/csrc/offline-speaker-diarization-pyannote-impl.h#L469-L520));
+     ([исходник](https://github.com/k2-fsa/sherpa-onnx/blob/v1.13.6/sherpa-onnx/csrc/offline-speaker-diarization-pyannote-impl.h#L517-L564));
    - время segmentation, embedding, clustering, total и RTF из штатного
      debug-профиля, а также wall time, CPU и peak RSS процесса.
 5. Чтобы не принять ускорение ценой поломки результата, сохранить прежние
@@ -181,8 +191,8 @@ Upstream получил на одном английском файле 1,48× �
    неизменность распознанного текста. Для кандидата после сетки нужна отдельная
    слуховая проверка коротких ответов, смен говорящего и перекрывающейся речи.
 
-Не входят в прототип: выбор нового production default, пользовательский CLI-
-параметр, повторная настройка clustering, сравнение embedding-моделей и
+Не входят в прототип: выбор нового production default, пользовательский
+параметр CLI, повторная настройка clustering, сравнение embedding-моделей и
 параллельный запуск ASR. Эти решения возможны только после сетки. Ускорение
 должно сопровождаться ожидаемым снижением числа segmentation-окон и
 embedding-заданий. По одному wall time нельзя связать ускорение с шагом окна.
@@ -190,7 +200,10 @@ embedding-заданий. По одному wall time нельзя связат�
 ## Рекомендация
 
 Выбрать **обычное обновление до 1.13.6** и сначала проверить его в отдельном
-прототипе. Малый backport дублировал бы уже выпущенный upstream-код и потребовал
-бы собственного нативного wheel. Запрос upstream уже фактически выполнен PR
-#3870. Production default оставить `0,1`, пока сетка не подтвердит одновременно
-снижение работы, приемлемую скорость и сохранение качества разметки говорящих.
+прототипе. Обновление дает проекту штатную ручку для сокращения основной
+CPU-работы; свежесть зависимости сама по себе здесь не аргумент. Малый backport
+дублировал бы уже выпущенный upstream-код и потребовал бы собственного нативного
+wheel.
+Запрос upstream уже фактически выполнен PR #3870. Production default оставить
+`0,1`, пока сетка не подтвердит одновременно снижение работы, приемлемую
+скорость и сохранение качества разметки говорящих.
