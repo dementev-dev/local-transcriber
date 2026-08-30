@@ -6,3 +6,5 @@ dist/
 *.pyc
 .codex
 .qwen/
+tmp
+.scratch/handoffs/
