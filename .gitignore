@@ -6,3 +6,4 @@ dist/
 *.pyc
 .codex
 .qwen/
+tmp
