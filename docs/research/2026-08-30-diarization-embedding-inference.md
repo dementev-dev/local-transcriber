@@ -6,9 +6,10 @@
 менялись.
 
 **Метод:** проверены `sherpa-onnx==1.13.5`, `onnxruntime==1.28.0`, официальные
-скрипты экспорта и исходники владельцев моделей. ONNX-модели не скачивались.
-Формы ниже подтверждены экспортными контрактами, проверками метаданных и кодом
-загрузчика. Файлы из выпуска повторно не разбирались.
+скрипты экспорта и исходники владельцев моделей. Три официальных release asset
+прочитаны потоком без сохранения на диск: WeSpeaker ResNet34 LM, CAMPPlus en и
+TitaNet small. Их входы, выходы и метаданные разобраны через ORT 1.28.0; для
+каждого выполнен CPU smoke-test с batch size 2.
 
 ## Вопрос и краткий ответ
 
@@ -64,9 +65,18 @@ ORT по умолчанию исполняет граф последовател
 
 | Модель | Вход и выход официального экспорта | Следствие для batch |
 |---|---|---|
-| WeSpeaker ResNet34 LM | Один `float32`-вход `[B, T, 80]`, один выход `[B, D]`. Скрипт, которым sherpa-onnx добавляет метаданные, проверяет символические `B`, `T`, размерность 80 и единственный выход. Метаданные включают `framework=wespeaker`, `sample_rate`, `output_dim`, `normalize_samples=0` ([проверка sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx/blob/v1.13.5/scripts/wespeaker/add_meta_data.py), [экспорт WeSpeaker](https://github.com/wenet-e2e/wespeaker/blob/master/wespeaker/bin/export_onnx.py)). | Равные `T` можно сложить по `B`. Длины или маску граф не принимает; дополнение участвует в pooling и меняет эмбеддинг. |
-| CAMPPlus zh/en | Экспорт создает `float32`-вход `[N, T, 80]`, метаданные `framework=3d-speaker`, `output_dim`, `normalize_samples=1`, `feature_normalize_type=global-mean` ([скрипт sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx/blob/v1.13.5/scripts/3dspeaker/export-onnx.py)). | В скрипте есть ошибка: выход называется `embedding`, а dynamic axis задан для `embeddings`. Поэтому динамичность оси выхода файла из выпуска по исходнику не доказана. Upstream подтверждает лишь, что batch равной длины *должен* работать; для разных длин нужна маска ([ответ разработчика](https://github.com/k2-fsa/sherpa-onnx/issues/780)). |
-| NeMo TitaNet small | Два входа: `float32 [N, C, T]` и `int64 [N]` с длинами; embedding имеет форму `[N, D]` ([контракт C++-обертки](https://github.com/k2-fsa/sherpa-onnx/blob/v1.13.5/sherpa-onnx/csrc/speaker-embedding-extractor-nemo-model.h)). Метаданные содержат `framework=nemo`, `output_dim`, `feat_dim`, sample rate, параметры окна и нормализации ([экспорт](https://github.com/k2-fsa/sherpa-onnx/blob/v1.13.5/scripts/nemo/speaker-verification/export-onnx.py)). | Граф имеет нужный контракт для batch переменной длины с дополнением. Но sherpa-onnx создает обе входные формы с `N=1` и возвращает только первую строку ([реализация](https://github.com/k2-fsa/sherpa-onnx/blob/v1.13.5/sherpa-onnx/csrc/speaker-embedding-extractor-nemo-impl.h)). |
+| WeSpeaker ResNet34 LM | Release asset имеет один `float32`-вход `[B, T, 80]` и выход `[B, 256]` ([asset](https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/wespeaker_en_voxceleb_resnet34_LM.onnx)). Скрипт, которым sherpa-onnx добавляет метаданные, проверяет символические `B`, `T`, размерность 80 и единственный выход. Метаданные включают `framework=wespeaker`, `sample_rate`, `output_dim`, `normalize_samples=0` ([проверка sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx/blob/v1.13.5/scripts/wespeaker/add_meta_data.py), [экспорт WeSpeaker](https://github.com/wenet-e2e/wespeaker/blob/master/wespeaker/bin/export_onnx.py)). | Равные `T` можно сложить по `B`. Длины или маску граф не принимает; дополнение участвует в pooling и меняет эмбеддинг. |
+| CAMPPlus en | Release asset имеет `float32`-вход `[N, T, 80]` и выход с динамической первой осью `[*, 512]` ([asset](https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_campplus_sv_en_voxceleb_16k.onnx)). Метаданные: `framework=3d-speaker`, `output_dim=512`, `normalize_samples=1`, `feature_normalize_type=global-mean` ([экспорт sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx/blob/v1.13.5/scripts/3dspeaker/export-onnx.py)). | Несмотря на опечатку экспортного скрипта (`embedding`/`embeddings`), release asset принимает batch равной длины и возвращает все строки. Для разных длин граф по-прежнему не принимает маску или длины. |
+| NeMo TitaNet small | Release asset имеет входы `float32 [N, 80, T]` и `int64 [N]`; выходы — logits `[N, 16681]` и embedding `[N, 192]` ([asset](https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/nemo_en_titanet_small.onnx), [контракт C++-обертки](https://github.com/k2-fsa/sherpa-onnx/blob/v1.13.5/sherpa-onnx/csrc/speaker-embedding-extractor-nemo-model.h)). Метаданные содержат `framework=nemo`, `output_dim`, `feat_dim`, sample rate, параметры окна и нормализации ([экспорт](https://github.com/k2-fsa/sherpa-onnx/blob/v1.13.5/scripts/nemo/speaker-verification/export-onnx.py)). | Граф принимает batch и вектор длин. Но sherpa-onnx создает обе входные формы с `N=1` и возвращает только первую строку ([реализация](https://github.com/k2-fsa/sherpa-onnx/blob/v1.13.5/sherpa-onnx/csrc/speaker-embedding-extractor-nemo-impl.h)). |
+
+Smoke-test с синтетическими `float32`-признаками и одним intra-op thread дал
+для WeSpeaker `(2, 256)`, для CAMPPlus `(2, 512)` и для TitaNet `(2, 192)`.
+У WeSpeaker и CAMPPlus результат batch size 2 совпал с конкатенацией двух
+последовательных `Run` (`max_abs_diff=0`). У TitaNet элемент длиной 100 кадров
+также совпал, но элемент длиной 80, дополненный до 100 кадров, отличался от
+отдельного непаддированного вызова (`max_abs_diff=0,0269`). Это не тест качества
+на голосе, а подтверждение, что допустимый порог для variable-length batch нужно
+определить в прототипе, а не считать эквивалентность гарантированной контрактом.
 
 WeSpeaker ResNet34 состоит из Conv2d-блоков и statistics pooling
 ([исходник WeSpeaker](https://github.com/wenet-e2e/wespeaker/blob/master/wespeaker/models/resnet.py));
@@ -87,9 +97,9 @@ assets нет. Статический INT8 здесь означает собс�
 
 | Способ | Техническая доступность | Вердикт |
 |---|---|---|
-| Настоящий batch | Граф WeSpeaker поддерживает равные длины; CAMPPlus требует прямой проверки файла из выпуска; TitaNet поддерживает разные длины через второй вход. Sherpa-onnx для всех трех жестко формирует `N=1` и не имеет batch API. | Прототипировать только TitaNet и только условно для режима с известным числом говорящих. Для WeSpeaker/CAMPPlus без маски возможны лишь группы с одинаковым `T`; ожидаемая наполняемость неизвестна. |
+| Настоящий batch | Release-графы WeSpeaker и CAMPPlus поддерживают batch равной длины; TitaNet принимает batch и второй вход с длинами. Sherpa-onnx для всех трех жестко формирует `N=1` и не имеет batch API. | Прототипировать только TitaNet и только условно для режима с известным числом говорящих. Для WeSpeaker/CAMPPlus без маски возможны лишь группы с одинаковым `T`; ожидаемая наполняемость неизвестна. |
 | Несколько stream, одна session | Stream независимы, `Compute` использует локальные тензоры, а ORT разрешает нескольким потокам одновременно вызывать `Run` одной session ([архитектура ORT](https://onnxruntime.ai/docs/reference/high-level-design.html), [контракт 1.28.0](https://github.com/microsoft/onnxruntime/blob/v1.28.0/onnxruntime/core/session/inference_session.h)). Текущий цикл sherpa-onnx этого не делает. | Достойно узкого прототипа на WeSpeaker. У одной session общий intra-op pool; нужно сравнить внутренний и внешний параллелизм. Полный pool для каждого worker не нужен. |
-| Несколько session | Можно создать несколько extractor, но каждая session получает собственные пулы потоков и арены памяти. ORT прямо отмечает эти накладные расходы для двух session ([ответ сопровождающего](https://github.com/microsoft/onnxruntime/issues/11628)). | Не брать как самостоятельный кандидат. Допустима одна контрольная ячейка против shared-session, чтобы подтвердить отказ по реальному времени и RSS. |
+| Несколько session | Можно создать несколько extractor, но по умолчанию каждая session получает собственный intra-op pool и CPU arena. ORT отдельно предлагает общий pool против конкуренции session pools и общий allocator против роста памяти ([thread management](https://onnxruntime.ai/docs/performance/tune-performance/threading.html), [C API guide](https://onnxruntime.ai/docs/get-started/with-c.html#share-allocator-s-between-sessions)). | Не брать как самостоятельный кандидат. Допустима одна контрольная ячейка против shared-session, чтобы подтвердить отказ по реальному времени и RSS. |
 | Статический INT8 | ORT предоставляет `quantize_static`, использует calibration data и рекомендует static quantization для CNN. Для CPU первым выбором служит S8S8 QDQ; квантизация может ухудшить точность и даже скорость ([официальное руководство](https://onnxruntime.ai/docs/performance/model-optimizations/quantization.html)). | Главный кандидат для действующего WeSpeaker. CAMPPlus и TitaNet квантизовать только после продуктового решения использовать соответствующую модель. |
 
 Batch сокращает число `Session::Run` и может лучше загрузить SIMD, но число
@@ -111,8 +121,11 @@ AVX512-VNNI kernels
 
 Официальное руководство ORT предупреждает:
 
-- на AVX2 и AVX-512 без VNNI путь U8S8 использует `VPMADDUBSW` и может дать
-  saturation; при потере точности предусмотрены `reduce_range` или U8U8;
+- S8S8 QDQ остается первым выбором CPU. Если он дает значимую потерю
+  точности, ORT советует проверить U8U8;
+- отдельный путь U8S8 на AVX2 и AVX-512 без VNNI использует `VPMADDUBSW` и
+  может дать saturation; если до него дойдет матрица, этот риск снижают
+  `reduce_range` или переход на U8U8;
 - на x86 с VNNI этой проблемы нет, а INT8 обычно выигрывает больше;
 - на старом CPU без подходящих инструкций quantize/dequantize overhead способен
   сделать модель медленнее
@@ -143,8 +156,6 @@ WeSpeaker на старом Intel использовал в среднем 6,84 
   не загрузит.
 - Точность статического INT8 после калибровки и необходимость исключить отдельные
   узлы через quantization debugging.
-- Фактическая batch-форма выхода CAMPPlus release asset из-за ошибки в экспортном
-  скрипте.
 - Распределение `T` у пар "окно, локальный говорящий". Без него нельзя оценить
   полезность exact-length buckets для WeSpeaker/CAMPPlus.
 - Выигрыш shared-session concurrency после ограничения общего числа потоков,
@@ -165,8 +176,8 @@ WeSpeaker на старом Intel использовал в среднем 6,84 
 - только после технического выигрыша повторить действующие проверки числа
   голосовых кластеров, purity и слов без говорящего.
 
-U8U8 или `reduce_range` добавлять лишь при подтвержденной потере точности на
-AVX2. В первую матрицу эти варианты не входят.
+При значительной потере точности S8S8 проверить U8U8. Отдельный U8S8 с
+`reduce_range` в первую матрицу не входит.
 
 ### 2. Shared-session streams - второй кандидат
 
