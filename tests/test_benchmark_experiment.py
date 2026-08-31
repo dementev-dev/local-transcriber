@@ -294,6 +294,34 @@ def test_identity_and_runtime_validation_cover_exact_versions_and_build(tmp_path
         experiment.validate_environment(manifest, changed_build)
 
 
+def test_portable_handoff_check_skips_only_machine_identity(tmp_path):
+    manifest = _manifest(tmp_path)
+    foreign_environment = copy.deepcopy(_environment())
+    foreign_environment.update(
+        platform="Linux Ryzen",
+        logical_cores=24,
+        physical_cores=12,
+        cpu_sku="AMD Ryzen 9 5900X 12-Core Processor",
+        cpu_flags=["avx", "avx2", "avx512f"],
+        ram_bytes=64 * 1024**3,
+        swap_total_bytes=0,
+    )
+
+    experiment.validate_environment(
+        manifest,
+        foreign_environment,
+        check_machine=False,
+    )
+
+    foreign_environment["packages"]["numpy"] = "2.4.4"
+    with pytest.raises(ValueError, match="numpy==2.4.3"):
+        experiment.validate_environment(
+            manifest,
+            foreign_environment,
+            check_machine=False,
+        )
+
+
 def test_manifest_rejects_stage_boundary_thread_budget_and_non_alternating_ab(tmp_path):
     manifest = _manifest(tmp_path)
     manifest["cells"][0]["stage"] = "ryzen"
@@ -733,7 +761,19 @@ def test_capsule_verification_checks_hashes_commits_and_safe_paths(tmp_path):
     payload = b"private"
     payload_hash = hashlib.sha256(payload).hexdigest()
     manifest_path = tmp_path / "manifest.json"
-    manifest_bytes = b'{"schema_version":3}\n'
+    manifest_value = {
+        "schema_version": 3,
+        "artifacts": [
+            {
+                "id": "input",
+                "path": "data/payload.bin",
+                "sha256": payload_hash,
+            }
+        ],
+        "recordings": [],
+        "calibration": [],
+    }
+    manifest_bytes = json.dumps(manifest_value).encode()
     manifest_path.write_bytes(manifest_bytes)
     capsule = {
         "capsule_id": "opaque-41",
@@ -768,6 +808,19 @@ def test_capsule_verification_checks_hashes_commits_and_safe_paths(tmp_path):
         "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
     }
 
+    incomplete_capsule = copy.deepcopy(capsule)
+    incomplete_capsule["files"].pop("data/payload.bin")
+    incomplete_path = tmp_path / "incomplete.zip"
+    with zipfile.ZipFile(incomplete_path, "w") as archive:
+        archive.writestr("capsule.json", json.dumps(incomplete_capsule))
+        archive.writestr("manifest.json", manifest_bytes)
+    with pytest.raises(ValueError, match="Входной файл manifest"):
+        experiment.verify_capsule(
+            incomplete_path,
+            experiment.file_sha256(incomplete_path),
+            expected_manifest_path=manifest_path,
+        )
+
     unrelated_manifest = tmp_path / "unrelated-manifest.json"
     unrelated_manifest.write_bytes(b'{"schema_version":3,"other":true}\n')
     with pytest.raises(ValueError, match="не совпал с manifest.json капсулы"):
@@ -791,9 +844,16 @@ def test_capsule_verification_checks_hashes_commits_and_safe_paths(tmp_path):
 
 
 def test_capsule_binds_candidate_result_evidence_to_file_index(tmp_path):
+    input_bytes = b"input"
+    input_hash = hashlib.sha256(input_bytes).hexdigest()
     result_bytes = b'{"aggregate":{"quality_passed":true}}'
     result_hash = hashlib.sha256(result_bytes).hexdigest()
     manifest_value = {
+        "artifacts": [
+            {"id": "input", "path": "data/input.bin", "sha256": input_hash}
+        ],
+        "recordings": [],
+        "calibration": [],
         "handoff": {
             "candidate_recipes": [
                 {
@@ -812,6 +872,7 @@ def test_capsule_binds_candidate_result_evidence_to_file_index(tmp_path):
         "public_report_sha256": "4" * 64,
         "files": {
             "manifest.json": hashlib.sha256(manifest_bytes).hexdigest(),
+            "data/input.bin": input_hash,
             "results/candidate.json": result_hash,
         },
     }
@@ -819,6 +880,7 @@ def test_capsule_binds_candidate_result_evidence_to_file_index(tmp_path):
     with zipfile.ZipFile(archive_path, "w") as archive:
         archive.writestr("capsule.json", json.dumps(capsule))
         archive.writestr("manifest.json", manifest_bytes)
+        archive.writestr("data/input.bin", input_bytes)
         archive.writestr("results/candidate.json", result_bytes)
 
     experiment.verify_capsule(
@@ -843,6 +905,7 @@ def test_capsule_binds_candidate_result_evidence_to_file_index(tmp_path):
     with zipfile.ZipFile(broken_path, "w") as archive:
         archive.writestr("capsule.json", json.dumps(capsule))
         archive.writestr("manifest.json", broken_manifest_bytes)
+        archive.writestr("data/input.bin", input_bytes)
         archive.writestr("results/candidate.json", result_bytes)
     with pytest.raises(ValueError, match="Результат кандидата"):
         experiment.verify_capsule(

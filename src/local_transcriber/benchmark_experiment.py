@@ -879,7 +879,10 @@ def environment_snapshot() -> dict[str, Any]:
 
 
 def validate_environment(
-    manifest: Mapping[str, Any], environment: Mapping[str, Any]
+    manifest: Mapping[str, Any],
+    environment: Mapping[str, Any],
+    *,
+    check_machine: bool = True,
 ) -> None:
     experiment = manifest["experiment"]
     for name, expected in experiment["dependencies"].items():
@@ -898,6 +901,8 @@ def validate_environment(
     }
     if expected_builds != {runtime_build}:
         raise ValueError("Хеш runtime-сборки не совпал с enabled-ячейками")
+    if not check_machine:
+        return
     machine = manifest["machine"]
     if environment.get("platform") != machine["os"]:
         raise ValueError("ОС не совпала с manifest")
@@ -946,7 +951,9 @@ def _runtime_profile() -> str | None:
     except (OSError, subprocess.TimeoutExpired):
         return None
     value = completed.stdout.strip()
-    return value or None if completed.returncode == 0 else None
+    if completed.returncode != 0:
+        return None
+    return value or None
 
 
 def _runtime_governor() -> str | None:
@@ -1640,6 +1647,32 @@ def worker_main(request_path: Path) -> None:
     _save_json(Path(request["response_path"]), result)
 
 
+def _manifest_file_index(manifest: Mapping[str, Any]) -> dict[str, str]:
+    """Возвращает каждый входной файл, который manifest требует от капсулы."""
+    required = {}
+
+    def add(item: Mapping[str, Any], label: str) -> None:
+        path = _require_relative_path(item.get("path"), f"{label}.path")
+        sha256 = _require_sha256(item.get("sha256"), f"{label}.sha256")
+        previous = required.setdefault(path, sha256)
+        if previous != sha256:
+            raise ValueError(f"{label}: один путь ссылается на разные SHA-256")
+
+    for artifact in manifest.get("artifacts", []):
+        add(artifact, f"artifact:{artifact.get('id')}")
+    for recording in manifest.get("recordings", []):
+        label = f"recording:{recording.get('id')}"
+        add(recording, label)
+        for key in ("reference", "asr_words"):
+            if (side := recording.get(key)) is not None:
+                add(side, f"{label}.{key}")
+    for source in manifest.get("calibration", []):
+        add(source, f"calibration:{source.get('id')}")
+    if not required:
+        raise ValueError("Manifest капсулы не содержит входных файлов")
+    return required
+
+
 def verify_capsule(
     archive_path: Path,
     expected_sha256: str,
@@ -1708,6 +1741,11 @@ def verify_capsule(
         if declared["manifest.json"] != manifest_sha256:
             raise ValueError("Хеш manifest.json не совпал с индексом капсулы")
         archived_manifest_value = json.loads(archived_manifest)
+        for name, expected in _manifest_file_index(archived_manifest_value).items():
+            if declared.get(name) != expected:
+                raise ValueError(
+                    "Входной файл manifest не совпал с индексом файлов капсулы"
+                )
         handoff = archived_manifest_value.get("handoff", {})
         for candidate in handoff.get("candidate_recipes", []):
             result_file = candidate.get("result_file")
@@ -1738,8 +1776,6 @@ def run_cli(args: Any, raw_manifest: Mapping[str, Any]) -> None:
     )
     manifest = resolve_manifest_paths(raw_manifest, args.manifest.parent)
     warnings = validate_manifest(manifest)
-    environment = environment_snapshot()
-    validate_environment(manifest, environment)
     capsule_path = getattr(args, "capsule", None)
     capsule_sha256 = getattr(args, "capsule_sha256", None)
     finalized_handoff = manifest["handoff"]["outcome"] != "pending"
@@ -1755,6 +1791,15 @@ def run_cli(args: Any, raw_manifest: Mapping[str, Any]) -> None:
             expected_report_sha256=manifest["handoff"]["public_report_sha256"],
             expected_capsule_id=manifest["handoff"]["capsule_id"],
         )
+    environment = environment_snapshot()
+    portable_handoff_check = (
+        args.validate_only and finalized_handoff and capsule_result is not None
+    )
+    validate_environment(
+        manifest,
+        environment,
+        check_machine=not portable_handoff_check,
+    )
     if args.validate_only:
         plan = safe_plan(manifest, warnings, environment)
         if capsule_result is not None:
