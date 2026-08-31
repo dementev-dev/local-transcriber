@@ -137,7 +137,7 @@ def _manifest(tmp_path):
 
 def _environment():
     return {
-        "sherpa_onnx_version": "1.13.5",
+        "sherpa_onnx_version": "1.13.6",
         "onnxruntime_version": "1",
         "numpy_version": "2",
         "psutil_version": "7",
@@ -408,7 +408,7 @@ def test_stage_timing_parser_accepts_native_lines():
         "[I] OfflineSpeakerDiarization: clustering 0.100 s\n"
         "[I] OfflineSpeakerDiarization: total 3.100 s, audio 10.000 s, RTF 0.310"
     )
-    stages = calibration.parse_stage_timings(log, "1.13.5")
+    stages = calibration.parse_stage_timings(log, "1.13.6")
     assert stages["engine_total_seconds"] == 3.1
     assert stages["engine_audio_seconds"] == 10.0
     assert stages["engine_rtf"] == 0.31
@@ -424,7 +424,7 @@ def test_stage_timing_parser_accepts_native_lines():
 )
 def test_stage_timing_parser_rejects_missing_duplicate_and_negative(log):
     with pytest.raises(ValueError):
-        calibration.parse_stage_timings(log, "1.13.5")
+        calibration.parse_stage_timings(log, "1.13.6")
 
 
 def test_stage_timing_parser_rejects_extra_malformed_record():
@@ -436,7 +436,7 @@ def test_stage_timing_parser_rejects_extra_malformed_record():
         "OfflineSpeakerDiarization: total 3.100 s, audio 10.000 s, RTF 0.310"
     )
     with pytest.raises(ValueError, match="повреждённую"):
-        calibration.parse_stage_timings(log, "1.13.5")
+        calibration.parse_stage_timings(log, "1.13.6")
 
 
 def test_measurement_uses_injected_cpu_clock_and_rss_once():
@@ -708,7 +708,7 @@ def test_execute_cell_rejects_text_mismatch_without_persisting_private_text(
     tmp_path, monkeypatch
 ):
     manifest = _manifest(tmp_path)
-    output = {"environment": {"logical_cpus": 4, "sherpa_onnx_version": "1.13.5"}}
+    output = {"environment": {"logical_cpus": 4, "sherpa_onnx_version": "1.13.6"}}
     spec = calibration.expand_automatic_cells(manifest, "e" * 64)[0]
     recording = manifest["recordings"][0]
     private_text = " СОВЕРШЕННО-СЕКРЕТНЫЙ-ТЕКСТ"
@@ -758,7 +758,7 @@ def test_execute_cell_rejects_text_mismatch_without_persisting_private_text(
 
 def test_execute_cell_rejects_engine_audio_duration_mismatch(tmp_path, monkeypatch):
     manifest = _manifest(tmp_path)
-    output = {"environment": {"logical_cpus": 4, "sherpa_onnx_version": "1.13.5"}}
+    output = {"environment": {"logical_cpus": 4, "sherpa_onnx_version": "1.13.6"}}
     spec = calibration.expand_automatic_cells(manifest, "e" * 64)[0]
     recording = manifest["recordings"][0]
     monkeypatch.setattr(

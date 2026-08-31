@@ -25,7 +25,7 @@ from tempfile import NamedTemporaryFile
 from typing import Any
 
 SCHEMA_VERSION = 2
-EXPECTED_SHERPA_ONNX_VERSION = "1.13.5"
+EXPECTED_SHERPA_ONNX_VERSION = "1.13.6"
 SAMPLE_RATE = 16_000
 SAMPLE_WIDTH_BYTES = 2
 CHANNELS = 1
@@ -133,7 +133,7 @@ class PeakRssSampler:
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Проверяет и запускает воспроизводимый CPU-benchmark из issue #25. "
+            "Проверяет и запускает воспроизводимый CPU-benchmark диаризации. "
             "Приватные пути и результаты остаются вне Git."
         ),
         epilog=(
@@ -144,7 +144,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--manifest",
         type=Path,
-        help="manifest v2; относительные пути считаются от его каталога",
+        help="manifest v2/v3; относительные пути считаются от его каталога",
     )
     parser.add_argument(
         "--output",
@@ -155,6 +155,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--work-dir",
         type=Path,
         help="каталог декодированных WAV и запросов дочерним процессам",
+    )
+    parser.add_argument(
+        "--capsule",
+        type=Path,
+        help="исходный ZIP приватной капсулы для проверки handoff",
+    )
+    parser.add_argument(
+        "--capsule-sha256",
+        help="ожидаемый внешний SHA-256 ZIP-капсулы",
     )
     # Оставлено для воспроизводимости старых команд; значение входит в experiment_id.
     parser.add_argument(
@@ -201,6 +210,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             missing.append("output")
         if missing:
             parser.error("обязательные параметры: " + ", ".join(missing))
+        if (args.capsule is None) != (args.capsule_sha256 is None):
+            parser.error("--capsule и --capsule-sha256 задаются вместе")
         if args.prepare_asr is not None:
             asr_missing = [
                 name
@@ -747,7 +758,7 @@ def select_threshold(
 
 
 def parse_stage_timings(stderr: str, sherpa_version: str) -> dict[str, float]:
-    """Строго разбирает недокументированный debug-контракт sherpa 1.13.5."""
+    """Строго разбирает недокументированный debug-контракт sherpa 1.13.6."""
     if sherpa_version != EXPECTED_SHERPA_ONNX_VERSION:
         raise ValueError(
             f"Неизвестный формат stage timing sherpa-onnx {sherpa_version}"
@@ -1536,9 +1547,20 @@ def validation_summary(
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     if args.worker is not None:
+        request = json.loads(args.worker.read_text(encoding="utf-8"))
+        if request.get("worker_schema_version") == 3:
+            from local_transcriber.benchmark_experiment import worker_main
+
+            worker_main(args.worker)
+            return
         _worker_main(args.worker)
         return
     raw_manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
+    if raw_manifest.get("schema_version") == 3:
+        from local_transcriber.benchmark_experiment import run_cli
+
+        run_cli(args, raw_manifest)
+        return
     validate_manifest(raw_manifest, verify_files=False)
     manifest = resolve_manifest_paths(raw_manifest, args.manifest.parent)
     if args.threads is not None:
