@@ -593,6 +593,19 @@ def test_schedule_preserves_raw_repeats_and_resumes_only_success(tmp_path):
     assert all(item["guard"]["attempts"][0]["valid"] for item in second["cells"])
 
 
+def test_runtime_profile_falls_back_to_powerprofilesctl(monkeypatch):
+    monkeypatch.setattr(experiment, "_read_optional_text", lambda _path: None)
+    monkeypatch.setattr(
+        experiment.subprocess,
+        "run",
+        lambda *args, **kwargs: experiment.subprocess.CompletedProcess(
+            args[0], 0, stdout="balanced\n", stderr=""
+        ),
+    )
+
+    assert experiment._runtime_profile() == "balanced"
+
+
 def test_runtime_guard_retries_once_and_persists_transition_evidence(tmp_path):
     manifest = _manifest(tmp_path)
     manifest["cells"][1]["enabled"] = False

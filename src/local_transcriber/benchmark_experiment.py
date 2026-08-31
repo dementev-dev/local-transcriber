@@ -931,6 +931,24 @@ def _runtime_supply() -> str | None:
     return None
 
 
+def _runtime_profile() -> str | None:
+    profile = _read_optional_text(Path("/sys/firmware/acpi/platform_profile"))
+    if profile is not None:
+        return profile
+    try:
+        completed = subprocess.run(
+            ["powerprofilesctl", "get"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    value = completed.stdout.strip()
+    return value or None if completed.returncode == 0 else None
+
+
 def _runtime_governor() -> str | None:
     values = {
         value
@@ -1006,7 +1024,7 @@ def runtime_guard_snapshot() -> dict[str, Any]:
     swap = psutil.swap_memory()
     return {
         "supply": _runtime_supply(),
-        "profile": _read_optional_text(Path("/sys/firmware/acpi/platform_profile")),
+        "profile": _runtime_profile(),
         "governor": _runtime_governor(),
         "turbo": _runtime_turbo(),
         "power_limits": _runtime_power_limits(),
