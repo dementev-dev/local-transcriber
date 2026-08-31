@@ -370,11 +370,13 @@ def validate_manifest(
     if machine["cpu_flags"] != sorted(set(machine["cpu_flags"])):
         raise ValueError("machine.cpu_flags: список должен быть сортирован без дублей")
     _exact_keys(machine["power"], POWER_KEYS, "machine.power")
-    _require_positive(
-        machine["power"]["temperature_celsius"],
-        "machine.power.temperature_celsius",
-        allow_zero=True,
-    )
+    temperature = machine["power"]["temperature_celsius"]
+    if temperature is not None:
+        _require_positive(
+            temperature,
+            "machine.power.temperature_celsius",
+            allow_zero=True,
+        )
     _require_positive(
         machine["power"]["swap_total_bytes"],
         "machine.power.swap_total_bytes",
@@ -714,14 +716,16 @@ def _validate_handoff(
         )
         name = _require_id(candidate["name"], f"handoff.candidate_recipes:{index}.name")
         candidate_names.append(name)
-        cell = combination_cells.get(name)
-        if cell is None:
-            raise ValueError(
-                "handoff: кандидат не описан включенной combination-ячейкой"
-            )
-        expected_cell_id = make_cell_id(manifest, cell)
-        if candidate["cell_id"] != expected_cell_id:
-            raise ValueError(f"handoff:{name}: cell_id не совпадает с manifest")
+        _require_sha256(candidate["cell_id"], f"handoff:{name}.cell_id")
+        if experiment["stage"] == "intel":
+            cell = combination_cells.get(name)
+            if cell is None:
+                raise ValueError(
+                    "handoff: кандидат не описан включенной combination-ячейкой"
+                )
+            expected_cell_id = make_cell_id(manifest, cell)
+            if candidate["cell_id"] != expected_cell_id:
+                raise ValueError(f"handoff:{name}: cell_id не совпадает с manifest")
         _require_sha256(candidate["result_sha256"], f"handoff:{name}.result_sha256")
         _require_relative_path(candidate["result_file"], f"handoff:{name}.result_file")
         for gate in ("mandatory_passed", "memory_passed", "diagnostic_approved"):
@@ -1673,16 +1677,156 @@ def _manifest_file_index(manifest: Mapping[str, Any]) -> dict[str, str]:
     return required
 
 
+def _portable_inference_recipe(
+    manifest: Mapping[str, Any], inference: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Переносит только заданные спецификацией конфигурации с бюджетом P."""
+    result = dict(inference)
+    physical_cores = manifest["machine"]["physical_cores"]
+    mode = result["mode"]
+    uses_physical_intra = result["intra_op_threads"] == physical_cores and (
+        (
+            mode in {"sequential", "titanet-batch"}
+            and result["outer_workers"] == 1
+            and result["session_count"] == 1
+        )
+        or (
+            mode == "shared-session"
+            and result["outer_workers"] == 2
+            and result["session_count"] == 1
+        )
+    )
+    if uses_physical_intra:
+        result["intra_op_threads"] = "physical-cores"
+    elif (
+        mode == "shared-session"
+        and result["outer_workers"] == physical_cores
+        and result["session_count"] == 1
+        and result["intra_op_threads"] == 1
+    ):
+        result["outer_workers"] = "physical-cores"
+    elif (
+        mode == "separate-session"
+        and result["outer_workers"] == physical_cores
+        and result["session_count"] == physical_cores
+        and result["intra_op_threads"] == 1
+    ):
+        result["outer_workers"] = "physical-cores"
+        result["session_count"] = "physical-cores"
+    return result
+
+
+def _portable_cell_recipe(
+    manifest: Mapping[str, Any], cell: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Нормализует переносимый между машинами рецепт ячейки."""
+    return {
+        "window_shift_ratio": cell["window_shift_ratio"],
+        "segmentation_artifact_id": cell["segmentation_artifact_id"],
+        "embedding_artifact_id": cell["embedding_artifact_id"],
+        "counter": cell["counter"],
+        "clustering": cell["clustering"],
+        "inference": _portable_inference_recipe(manifest, cell["inference"]),
+    }
+
+
+def _validate_ryzen_capsule_manifest(
+    ryzen_manifest: Mapping[str, Any], intel_manifest: Mapping[str, Any]
+) -> None:
+    """Связывает Ryzen-план с проверенным Intel manifest из капсулы."""
+    if intel_manifest.get("experiment", {}).get("stage") != "intel":
+        raise ValueError("Капсула Ryzen должна содержать Intel manifest")
+    if ryzen_manifest["experiment"]["stage"] != "ryzen":
+        raise ValueError("Переносимый manifest должен относиться к Ryzen")
+    if ryzen_manifest["handoff"] != intel_manifest.get("handoff"):
+        raise ValueError("Ryzen manifest не совпал с handoff из капсулы")
+    ryzen_experiment = ryzen_manifest["experiment"]
+    intel_experiment = intel_manifest["experiment"]
+    for key in ("sherpa_patch_sha256", "dependencies"):
+        if ryzen_experiment[key] != intel_experiment.get(key):
+            raise ValueError(
+                "Ryzen manifest изменил закрепленный runtime Intel-капсулы"
+            )
+    if ryzen_manifest["rss_sample_interval_ms"] != intel_manifest.get(
+        "rss_sample_interval_ms"
+    ):
+        raise ValueError("Ryzen manifest изменил интервал измерения RSS")
+    for key in ("artifacts", "recordings", "calibration", "qdq"):
+        if ryzen_manifest[key] != intel_manifest.get(key):
+            raise ValueError(
+                "Ryzen manifest изменил закрепленные входы Intel-капсулы"
+            )
+    intel_cells_by_id = {
+        make_cell_id(intel_manifest, cell): cell
+        for cell in intel_manifest["cells"]
+        if cell["phase"] == "combination" and cell["enabled"]
+    }
+    handed_candidate_recipes = []
+    handed_baseline_recipes = []
+    handed_mechanism_recipes = []
+    for candidate in intel_manifest["handoff"]["candidate_recipes"]:
+        cell = intel_cells_by_id.get(candidate["cell_id"])
+        if cell is None:
+            raise ValueError(
+                "Handoff-кандидат не связан с Intel combination-ячейкой"
+            )
+        baselines = [
+            baseline
+            for baseline in intel_manifest["cells"]
+            if baseline["enabled"]
+            and baseline["pair_id"] == cell["pair_id"]
+            and baseline["pair_role"] == "baseline"
+        ]
+        if len(baselines) != 1:
+            raise ValueError(
+                "Handoff-кандидат не связан с Intel baseline-ячейкой"
+            )
+        candidate_recipe = _portable_cell_recipe(intel_manifest, cell)
+        baseline_recipe = _portable_cell_recipe(intel_manifest, baselines[0])
+        handed_candidate_recipes.append(candidate_recipe)
+        handed_baseline_recipes.append(baseline_recipe)
+        for key in ("embedding_artifact_id", "inference"):
+            if candidate_recipe[key] == baseline_recipe[key]:
+                continue
+            mechanism_recipe = copy.deepcopy(baseline_recipe)
+            mechanism_recipe[key] = candidate_recipe[key]
+            handed_mechanism_recipes.append(mechanism_recipe)
+    for cell in ryzen_manifest["cells"]:
+        if not cell["enabled"]:
+            continue
+        if cell["phase"] not in {"baseline", "mechanism", "combination"}:
+            raise ValueError("Ryzen manifest содержит ячейку вне этапов 5-6")
+        recipe = _portable_cell_recipe(ryzen_manifest, cell)
+        if cell["phase"] == "baseline" and cell["pair_role"] == "candidate":
+            raise ValueError("Ryzen baseline-ячейка не может быть кандидатом")
+        if cell["pair_role"] == "baseline" or cell["phase"] == "baseline":
+            if recipe not in handed_baseline_recipes:
+                raise ValueError(
+                    "Ryzen baseline-ячейка не совпала с Intel baseline"
+                )
+        elif cell["phase"] == "mechanism" and recipe not in handed_mechanism_recipes:
+            raise ValueError(
+                "Ryzen mechanism-ячейка не совпала с механизмом handoff"
+            )
+        elif cell["phase"] == "combination" and recipe not in handed_candidate_recipes:
+            raise ValueError(
+                "Ryzen combination-ячейка не совпала с рецептом handoff"
+            )
+
+
 def verify_capsule(
     archive_path: Path,
     expected_sha256: str,
     *,
-    expected_manifest_path: Path,
+    expected_manifest_path: Path | None,
+    expected_ryzen_manifest: Mapping[str, Any] | None = None,
     expected_source_commit: str | None = None,
     expected_report_sha256: str | None = None,
     expected_capsule_id: str | None = None,
 ) -> dict[str, Any]:
     """Сверяет внешний и внутренние хеши приватной ZIP-капсулы."""
+    if (expected_manifest_path is None) == (expected_ryzen_manifest is None):
+        raise ValueError("Нужно выбрать ровно один Intel или Ryzen manifest")
     if file_sha256(archive_path) != expected_sha256:
         raise ValueError("SHA-256 ZIP-капсулы не совпал")
     with zipfile.ZipFile(archive_path) as archive:
@@ -1733,14 +1877,19 @@ def verify_capsule(
             actual = hashlib.sha256(archive.read(name)).hexdigest()
             if actual != expected:
                 raise ValueError("Внутренний SHA-256 капсулы не совпал")
-        manifest_bytes = expected_manifest_path.read_bytes()
         archived_manifest = archive.read("manifest.json")
-        if archived_manifest != manifest_bytes:
-            raise ValueError("manifest аргумента не совпал с manifest.json капсулы")
-        manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
+        if expected_manifest_path is not None:
+            manifest_bytes = expected_manifest_path.read_bytes()
+            if archived_manifest != manifest_bytes:
+                raise ValueError("manifest аргумента не совпал с manifest.json капсулы")
+        manifest_sha256 = hashlib.sha256(archived_manifest).hexdigest()
         if declared["manifest.json"] != manifest_sha256:
             raise ValueError("Хеш manifest.json не совпал с индексом капсулы")
         archived_manifest_value = json.loads(archived_manifest)
+        if expected_ryzen_manifest is not None:
+            _validate_ryzen_capsule_manifest(
+                expected_ryzen_manifest, archived_manifest_value
+            )
         for name, expected in _manifest_file_index(archived_manifest_value).items():
             if declared.get(name) != expected:
                 raise ValueError(
@@ -1783,10 +1932,12 @@ def run_cli(args: Any, raw_manifest: Mapping[str, Any]) -> None:
         raise ValueError("Итоговый handoff требует --capsule и --capsule-sha256")
     capsule_result = None
     if capsule_path is not None and capsule_sha256 is not None:
+        ryzen_stage = manifest["experiment"]["stage"] == "ryzen"
         capsule_result = verify_capsule(
             capsule_path,
             capsule_sha256,
-            expected_manifest_path=args.manifest,
+            expected_manifest_path=None if ryzen_stage else args.manifest,
+            expected_ryzen_manifest=raw_manifest if ryzen_stage else None,
             expected_source_commit=manifest["handoff"]["source_commit"],
             expected_report_sha256=manifest["handoff"]["public_report_sha256"],
             expected_capsule_id=manifest["handoff"]["capsule_id"],

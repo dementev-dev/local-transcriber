@@ -4,6 +4,7 @@ import json
 import os
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -206,6 +207,119 @@ def _environment() -> dict[str, object]:
     }
 
 
+def _finalized_handoff_manifest(tmp_path: Path) -> dict[str, object]:
+    manifest = _manifest(tmp_path)
+    baseline = manifest["cells"][0]
+    baseline.update(
+        name="W0",
+        phase="combination",
+        pair_id="combination-c2",
+        pair_role="baseline",
+        schedule_position=10,
+    )
+    candidate = copy.deepcopy(baseline)
+    candidate.update(
+        name="C2",
+        pair_role="candidate",
+        schedule_position=11,
+    )
+    candidate["inference"].update(
+        mode="shared-session",
+        outer_workers=2,
+        session_count=1,
+        intra_op_threads=4,
+    )
+    manifest["cells"] = [baseline, candidate]
+    cell_id = experiment.make_cell_id(manifest, candidate)
+    manifest["handoff"] = {
+        "outcome": "handoff",
+        "source_commit": manifest["experiment"]["source_commit"],
+        "candidate_recipes": [
+            {
+                "name": "C2",
+                "cell_id": cell_id,
+                "result_file": "results/w0.json",
+                "result_sha256": "3" * 64,
+                "mandatory_passed": True,
+                "memory_passed": True,
+                "diagnostic_approved": True,
+            }
+        ],
+        "public_report_sha256": "4" * 64,
+        "capsule_id": "opaque-41",
+        "capsule_sha256": "5" * 64,
+    }
+    return manifest
+
+
+def _ryzen_capsule_fixture(tmp_path: Path):
+    intel = _finalized_handoff_manifest(tmp_path)
+    payloads = {}
+
+    def make_relative(item, archive_path):
+        content = Path(item["path"]).read_bytes()
+        item["path"] = archive_path
+        payloads[archive_path] = content
+        local_path = tmp_path / archive_path
+        local_path.parent.mkdir(parents=True, exist_ok=True)
+        local_path.write_bytes(content)
+
+    for artifact in intel["artifacts"]:
+        make_relative(artifact, f"artifacts/{artifact['id']}.bin")
+    for recording in intel["recordings"]:
+        make_relative(recording, f"recordings/{recording['id']}.wav")
+        make_relative(
+            recording["asr_words"], f"sidecars/{recording['id']}.words.json"
+        )
+        if recording["reference"] is not None:
+            make_relative(
+                recording["reference"], f"references/{recording['id']}.md"
+            )
+    for source in intel["calibration"]:
+        make_relative(source, f"calibration/{source['id']}.wav")
+
+    result_bytes = b'{"aggregate":{"quality_passed":true}}'
+    result_path = "results/c2.json"
+    payloads[result_path] = result_bytes
+    candidate = intel["handoff"]["candidate_recipes"][0]
+    candidate["result_file"] = result_path
+    candidate["result_sha256"] = hashlib.sha256(result_bytes).hexdigest()
+    intel_bytes = json.dumps(intel, separators=(",", ":")).encode()
+    files = {
+        "manifest.json": hashlib.sha256(intel_bytes).hexdigest(),
+        **{name: hashlib.sha256(value).hexdigest() for name, value in payloads.items()},
+    }
+    capsule = {
+        "capsule_id": intel["handoff"]["capsule_id"],
+        "source_commit": intel["handoff"]["source_commit"],
+        "public_report_sha256": intel["handoff"]["public_report_sha256"],
+        "files": files,
+    }
+    archive_path = tmp_path / "capsule.zip"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr("capsule.json", json.dumps(capsule))
+        archive.writestr("manifest.json", intel_bytes)
+        for name, content in payloads.items():
+            archive.writestr(name, content)
+
+    ryzen = copy.deepcopy(intel)
+    ryzen["experiment"].update(
+        id="cpu-diarization-ryzen",
+        stage="ryzen",
+        handoff_commit="6" * 40,
+    )
+    ryzen["machine"].update(
+        id="ryzen-8845h",
+        sku="AMD Ryzen 7 8845H",
+        physical_cores=8,
+        logical_cores=16,
+    )
+    for cell in ryzen["cells"]:
+        cell["stage"] = "ryzen"
+        cell["inference"]["intra_op_threads"] = 8
+    return archive_path, ryzen, files["manifest.json"]
+
+
 def _guard(**changes) -> dict[str, object]:
     result = {
         "supply": "ac",
@@ -320,6 +434,134 @@ def test_portable_handoff_check_skips_only_machine_identity(tmp_path):
             foreign_environment,
             check_machine=False,
         )
+
+
+def test_ryzen_manifest_preserves_intel_capsule_inputs_and_evidence(tmp_path):
+    intel = _finalized_handoff_manifest(tmp_path)
+    experiment.validate_manifest(intel, verify_files=False)
+    ryzen = copy.deepcopy(intel)
+    ryzen["experiment"].update(
+        id="cpu-diarization-ryzen",
+        stage="ryzen",
+        handoff_commit="6" * 40,
+    )
+    ryzen["machine"].update(
+        id="ryzen-8845h",
+        sku="AMD Ryzen 7 8845H",
+        physical_cores=8,
+        logical_cores=16,
+    )
+    for cell in ryzen["cells"]:
+        cell["stage"] = "ryzen"
+        cell["inference"]["intra_op_threads"] = 8
+    ryzen["cells"][0]["name"] = "R-W0-primary"
+    ryzen["cells"][1]["name"] = "R-C2-primary"
+
+    experiment.validate_manifest(ryzen, verify_files=False)
+    experiment._validate_ryzen_capsule_manifest(ryzen, intel)
+
+    changed_input = copy.deepcopy(ryzen)
+    changed_input["artifacts"][0]["sha256"] = "7" * 64
+    with pytest.raises(ValueError, match="закрепленные входы"):
+        experiment._validate_ryzen_capsule_manifest(changed_input, intel)
+
+    changed_handoff = copy.deepcopy(ryzen)
+    changed_handoff["handoff"]["public_report_sha256"] = "8" * 64
+    with pytest.raises(ValueError, match="handoff"):
+        experiment._validate_ryzen_capsule_manifest(changed_handoff, intel)
+
+    changed_recipe = copy.deepcopy(ryzen)
+    changed_recipe["cells"][1]["window_shift_ratio"] = 0.2
+    with pytest.raises(ValueError, match="рецептом handoff"):
+        experiment._validate_ryzen_capsule_manifest(changed_recipe, intel)
+
+    changed_candidate = copy.deepcopy(intel)
+    changed_candidate["handoff"]["candidate_recipes"][0]["cell_id"] = "8" * 64
+    changed_candidate_ryzen = copy.deepcopy(ryzen)
+    changed_candidate_ryzen["handoff"]["candidate_recipes"][0]["cell_id"] = (
+        "8" * 64
+    )
+    with pytest.raises(ValueError, match="Intel combination"):
+        experiment._validate_ryzen_capsule_manifest(
+            changed_candidate_ryzen, changed_candidate
+        )
+
+    changed_baseline = copy.deepcopy(ryzen)
+    changed_baseline["cells"][0]["window_shift_ratio"] = 0.5
+    with pytest.raises(ValueError, match="baseline"):
+        experiment._validate_ryzen_capsule_manifest(changed_baseline, intel)
+
+    changed_phase = copy.deepcopy(ryzen)
+    changed_phase["cells"][1]["phase"] = "mechanism"
+    changed_phase["cells"][1]["window_shift_ratio"] = 0.5
+    with pytest.raises(ValueError, match="механизмом handoff"):
+        experiment._validate_ryzen_capsule_manifest(changed_phase, intel)
+
+    changed_patch = copy.deepcopy(ryzen)
+    changed_patch["experiment"]["sherpa_patch_sha256"] = "7" * 64
+    with pytest.raises(ValueError, match="runtime"):
+        experiment._validate_ryzen_capsule_manifest(changed_patch, intel)
+
+    changed_dependencies = copy.deepcopy(ryzen)
+    changed_dependencies["experiment"]["dependencies"]["onnxruntime"] = "1.99.0"
+    with pytest.raises(ValueError, match="runtime"):
+        experiment._validate_ryzen_capsule_manifest(changed_dependencies, intel)
+
+    changed_rss_interval = copy.deepcopy(ryzen)
+    changed_rss_interval["rss_sample_interval_ms"] = 5000
+    with pytest.raises(ValueError, match="RSS"):
+        experiment._validate_ryzen_capsule_manifest(changed_rss_interval, intel)
+
+    literal_workers_intel = copy.deepcopy(intel)
+    literal_workers_intel["cells"][1]["inference"]["outer_workers"] = 4
+    literal_workers_intel["handoff"]["candidate_recipes"][0]["cell_id"] = (
+        experiment.make_cell_id(
+            literal_workers_intel, literal_workers_intel["cells"][1]
+        )
+    )
+    literal_workers_ryzen = copy.deepcopy(ryzen)
+    literal_workers_ryzen["handoff"] = copy.deepcopy(
+        literal_workers_intel["handoff"]
+    )
+    literal_workers_ryzen["cells"][1]["inference"].update(
+        outer_workers=4,
+        intra_op_threads=4,
+    )
+    experiment._validate_ryzen_capsule_manifest(
+        literal_workers_ryzen, literal_workers_intel
+    )
+    scaled_workers_ryzen = copy.deepcopy(literal_workers_ryzen)
+    scaled_workers_ryzen["cells"][1]["inference"].update(
+        outer_workers=8,
+        intra_op_threads=8,
+    )
+    with pytest.raises(ValueError, match="рецептом handoff"):
+        experiment._validate_ryzen_capsule_manifest(
+            scaled_workers_ryzen, literal_workers_intel
+        )
+
+
+@pytest.mark.parametrize("cell_id", [None, "not-a-sha256"])
+def test_ryzen_manifest_rejects_invalid_handoff_cell_id(tmp_path, cell_id):
+    manifest = _finalized_handoff_manifest(tmp_path)
+    manifest["experiment"].update(stage="ryzen", handoff_commit="6" * 40)
+    for cell in manifest["cells"]:
+        cell["stage"] = "ryzen"
+    manifest["handoff"]["candidate_recipes"][0]["cell_id"] = cell_id
+
+    with pytest.raises(ValueError, match="cell_id"):
+        experiment.validate_manifest(manifest, verify_files=False)
+
+
+def test_manifest_accepts_unavailable_temperature_sensor(tmp_path):
+    manifest = _manifest(tmp_path)
+    manifest["machine"]["power"]["temperature_celsius"] = None
+
+    experiment.validate_manifest(manifest, verify_files=False)
+
+    manifest["machine"]["power"]["temperature_celsius"] = -1.0
+    with pytest.raises(ValueError, match="temperature_celsius"):
+        experiment.validate_manifest(manifest, verify_files=False)
 
 
 def test_manifest_rejects_stage_boundary_thread_budget_and_non_alternating_ab(tmp_path):
@@ -808,6 +1050,20 @@ def test_capsule_verification_checks_hashes_commits_and_safe_paths(tmp_path):
         "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
     }
 
+    with pytest.raises(ValueError, match="ровно один"):
+        experiment.verify_capsule(
+            archive_path,
+            archive_hash,
+            expected_manifest_path=None,
+        )
+    with pytest.raises(ValueError, match="ровно один"):
+        experiment.verify_capsule(
+            archive_path,
+            archive_hash,
+            expected_manifest_path=manifest_path,
+            expected_ryzen_manifest=manifest_value,
+        )
+
     incomplete_capsule = copy.deepcopy(capsule)
     incomplete_capsule["files"].pop("data/payload.bin")
     incomplete_path = tmp_path / "incomplete.zip"
@@ -840,6 +1096,44 @@ def test_capsule_verification_checks_hashes_commits_and_safe_paths(tmp_path):
             unsafe_path,
             experiment.file_sha256(unsafe_path),
             expected_manifest_path=manifest_path,
+        )
+
+
+def test_run_cli_accepts_verified_ryzen_capsule_manifest(
+    tmp_path, capsys, monkeypatch
+):
+    archive_path, ryzen, intel_manifest_sha256 = _ryzen_capsule_fixture(tmp_path)
+    manifest_path = tmp_path / "ryzen.json"
+    manifest_path.write_text(json.dumps(ryzen), encoding="utf-8")
+    args = SimpleNamespace(
+        manifest=manifest_path,
+        output=None,
+        work_dir=tmp_path / "work",
+        capsule=archive_path,
+        capsule_sha256=experiment.file_sha256(archive_path),
+        validate_only=True,
+        prepare_asr=None,
+    )
+    monkeypatch.setattr(experiment, "environment_snapshot", _environment)
+
+    experiment.run_cli(args, ryzen)
+
+    plan = json.loads(capsys.readouterr().out)
+    assert plan["stage"] == "ryzen"
+    assert plan["capsule"]["manifest_sha256"] == intel_manifest_sha256
+    assert plan["capsule"]["file_count"] == 14
+
+
+def test_verify_capsule_rejects_unlinked_ryzen_manifest(tmp_path):
+    archive_path, ryzen, _manifest_sha256 = _ryzen_capsule_fixture(tmp_path)
+    ryzen["artifacts"][0]["sha256"] = "7" * 64
+
+    with pytest.raises(ValueError, match="закрепленные входы"):
+        experiment.verify_capsule(
+            archive_path,
+            experiment.file_sha256(archive_path),
+            expected_manifest_path=None,
+            expected_ryzen_manifest=ryzen,
         )
 
 
