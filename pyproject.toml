@@ -42,6 +42,7 @@ packages = ["src/local_transcriber"]
 exclude = [
     "src/local_transcriber/benchmark_experiment.py",
     "src/local_transcriber/experimental_diarization.py",
+    "src/local_transcriber/streaming_sortformer_experiment.py",
 ]
 
 [[tool.uv.dependency-metadata]]
