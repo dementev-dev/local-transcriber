@@ -222,6 +222,7 @@ def test_load_speaker_diarizer_keeps_corrupt_cache_when_download_is_invalid(
 
     with (
         patch("huggingface_hub.cached_assets_path", return_value=tmp_path),
+        patch.dict(sys.modules, {"sherpa_onnx": SimpleNamespace()}),
         patch("httpx.stream", return_value=FakeResponse()),
         pytest.raises(RuntimeError, match="Контрольная сумма"),
     ):
