@@ -2,6 +2,7 @@ import copy
 import ctypes
 import hashlib
 import json
+import os
 import tomllib
 from datetime import UTC, datetime
 from pathlib import Path
@@ -30,6 +31,14 @@ def _write(root: Path, name: str, payload: bytes) -> dict[str, object]:
         "sha256": hashlib.sha256(payload).hexdigest(),
         "size_bytes": len(payload),
     }
+
+
+def _write_json(root: Path, name: str, value: object) -> dict[str, object]:
+    return _write(
+        root,
+        name,
+        (json.dumps(value, ensure_ascii=True, sort_keys=True) + "\n").encode(),
+    )
 
 
 def _record(
@@ -61,6 +70,7 @@ def _manifest(root: Path) -> dict[str, object]:
         source = _write(root, f"sources/{index}.wav", f"source-{index}".encode())
         inputs.append(
             {
+                "neutral_alias": f"control-{index + 1}",
                 "source_path": source["path"],
                 "source_sha256": source["sha256"],
                 "source_size_bytes": source["size_bytes"],
@@ -72,13 +82,74 @@ def _manifest(root: Path) -> dict[str, object]:
                 ),
             }
         )
+    package_generated_at = "2026-09-01T08:00:00+00:00"
+    package_rows = [
+        {
+            "neutral_alias": item["neutral_alias"],
+            "canonical_fragment_audio_sha256": item["fragment"]["sha256"],
+            "final_reference_sha256": item["fragment"]["reference_sha256"],
+            "full_recording_sha256": item["full_recording"]["sha256"],
+        }
+        for item in inputs
+    ]
+    package = _write_json(
+        root,
+        "owner/listening-package.json",
+        {
+            "schema": "local-transcriber.owner-listening-package.v1",
+            "generated_at": package_generated_at,
+            "references": package_rows,
+        },
+    )
+    approval_timestamp = "2026-09-01T09:00:00+00:00"
+    acceptance = {
+        "schema": "local-transcriber.reference-owner-acceptance.v1",
+        "actor": "owner",
+        "status": "approved",
+        "decision": "approved",
+        "timestamp": approval_timestamp,
+        "owner_package_sha256": package["sha256"],
+        "references": [
+            {
+                **package_row,
+                "fragment_expected_cluster_count": item["fragment"][
+                    "expected_cluster_count"
+                ],
+                "full_recording_expected_cluster_count": item["full_recording"][
+                    "expected_cluster_count"
+                ],
+                "fragment_review_complete": True,
+                "full_recording_count_review_complete": True,
+                "reference_accepted": True,
+            }
+            for item, package_row in zip(inputs, package_rows, strict=True)
+        ],
+        "step3": {
+            "recording_use_approved": True,
+            "inputs_and_counts_approved": True,
+            "full_recordings_available": True,
+            "final_hearing_gate_committed": True,
+        },
+    }
+    acceptance_file = _write_json(
+        root, "owner/reference-acceptance.json", acceptance
+    )
     return {
         "schema": "local-transcriber.streaming-sortformer-experiment.v1",
         "fresh_basis": {
             "marker": "issue-46-fresh-owner-reviewed-basis",
+            "owner_package": {
+                "path": package["path"],
+                "sha256": package["sha256"],
+                "generated_at": package_generated_at,
+            },
             "approval": {
+                "path": acceptance_file["path"],
+                "sha256": acceptance_file["sha256"],
+                "actor": "owner",
+                "status": "approved",
                 "decision": "approved",
-                "timestamp": "2026-09-01T09:00:00+00:00",
+                "timestamp": approval_timestamp,
             },
         },
         "source": {"commit": "a" * 40},
@@ -194,6 +265,232 @@ def _environment() -> dict[str, object]:
     return {"commit": "a" * 40, "clean": True}
 
 
+def _read_linked_json(root: Path, link: dict[str, object]) -> dict[str, object]:
+    return json.loads((root / str(link["path"])).read_text(encoding="utf-8"))
+
+
+def _rewrite_linked_json(
+    root: Path, link: dict[str, object], value: object
+) -> None:
+    payload = (json.dumps(value, ensure_ascii=True, sort_keys=True) + "\n").encode()
+    (root / str(link["path"])).write_bytes(payload)
+    link["sha256"] = hashlib.sha256(payload).hexdigest()
+
+
+def _rewrite_linked_bytes(
+    root: Path, link: dict[str, object], payload: bytes
+) -> None:
+    (root / str(link["path"])).write_bytes(payload)
+    link["sha256"] = hashlib.sha256(payload).hexdigest()
+
+
+def _media_path(manifest: dict[str, object], binding: str) -> str:
+    item = manifest["inputs"][0]
+    paths = {
+        "source": item["source_path"],
+        "fragment": item["fragment"]["path"],
+        "fragment-sidecar": item["fragment"]["sidecar_path"],
+        "reference": item["fragment"]["reference_path"],
+        "full-recording": item["full_recording"]["path"],
+        "full-sidecar": item["full_recording"]["sidecar_path"],
+    }
+    return str(paths[binding])
+
+
+def _set_binding_path(
+    manifest: dict[str, object], binding: str, value: str
+) -> None:
+    if binding in {"owner-package", "owner-acceptance"}:
+        link = "owner_package" if binding == "owner-package" else "approval"
+        manifest["fresh_basis"][link]["path"] = value
+        return
+    item = manifest["inputs"][0]
+    if binding == "source":
+        item["source_path"] = value
+    elif binding == "fragment":
+        item["fragment"]["path"] = value
+    elif binding == "fragment-sidecar":
+        item["fragment"]["sidecar_path"] = value
+    elif binding == "reference":
+        item["fragment"]["reference_path"] = value
+    elif binding == "full-recording":
+        item["full_recording"]["path"] = value
+    elif binding == "full-sidecar":
+        item["full_recording"]["sidecar_path"] = value
+    else:
+        raise AssertionError(f"unknown binding: {binding}")
+
+
+def _mutate_owner_acceptance(
+    manifest: dict[str, object], root: Path, case: str
+) -> None:
+    basis = manifest["fresh_basis"]
+    approval_link = basis["approval"]
+    package_link = basis["owner_package"]
+    acceptance = _read_linked_json(root, approval_link)
+    package = _read_linked_json(root, package_link)
+
+    def write_acceptance() -> None:
+        _rewrite_linked_json(root, approval_link, acceptance)
+
+    def write_package(*, sync_acceptance: bool = True) -> None:
+        _rewrite_linked_json(root, package_link, package)
+        if sync_acceptance:
+            acceptance["owner_package_sha256"] = package_link["sha256"]
+            write_acceptance()
+
+    if case == "approval-missing":
+        del basis["approval"]
+    elif case == "approval-null":
+        basis["approval"] = None
+    elif case == "approval-link-unknown":
+        approval_link["count_review_status"] = "approved"
+    elif case == "record-missing":
+        (root / str(approval_link["path"])).unlink()
+    elif case == "record-path-missing":
+        approval_link["path"] = "owner/missing-acceptance.json"
+    elif case == "record-hash-mismatch":
+        approval_link["sha256"] = "f" * 64
+    elif case == "record-json-invalid":
+        payload = b"{\n"
+        (root / str(approval_link["path"])).write_bytes(payload)
+        approval_link["sha256"] = hashlib.sha256(payload).hexdigest()
+    elif case == "record-unknown-key":
+        acceptance["count_review_status"] = "approved"
+        write_acceptance()
+    elif case == "record-count-review-schema":
+        acceptance = {
+            "schema": "local-transcriber.reference-count-review.v1",
+            "status": "approved",
+        }
+        write_acceptance()
+    elif case in {"actor", "status", "decision"}:
+        replacement = {
+            "actor": "automation",
+            "status": "draft",
+            "decision": "rejected",
+        }[case]
+        approval_link[case] = replacement
+        acceptance[case] = replacement
+        write_acceptance()
+    elif case == "timestamp-naive":
+        approval_link["timestamp"] = "2026-09-01T09:00:00"
+        acceptance["timestamp"] = approval_link["timestamp"]
+        write_acceptance()
+    elif case == "timestamp-early":
+        approval_link["timestamp"] = package_link["generated_at"]
+        acceptance["timestamp"] = approval_link["timestamp"]
+        write_acceptance()
+    elif case == "timestamp-link-mismatch":
+        acceptance["timestamp"] = "2026-09-01T10:00:00+00:00"
+        write_acceptance()
+    elif case == "package-missing":
+        del basis["owner_package"]
+    elif case == "package-link-unknown":
+        package_link["status"] = "approved"
+    elif case == "package-file-missing":
+        (root / str(package_link["path"])).unlink()
+    elif case == "package-hash-mismatch":
+        package_link["sha256"] = "e" * 64
+    elif case == "package-timestamp-mismatch":
+        package_link["generated_at"] = "2026-09-01T07:00:00+00:00"
+    elif case == "package-unknown-key":
+        package["status"] = "approved"
+        write_package()
+    elif case == "package-row-binding":
+        package["references"][0]["final_reference_sha256"] = "d" * 64
+        write_package()
+    elif case == "package-row-omitted":
+        package["references"].pop()
+        write_package()
+    elif case == "package-row-duplicate":
+        package["references"][2] = copy.deepcopy(package["references"][1])
+        write_package()
+    elif case == "acceptance-row-omitted":
+        acceptance["references"].pop()
+        write_acceptance()
+    elif case == "acceptance-row-duplicate":
+        acceptance["references"][2] = copy.deepcopy(acceptance["references"][1])
+        write_acceptance()
+    elif case in {
+        "neutral_alias",
+        "canonical_fragment_audio_sha256",
+        "final_reference_sha256",
+        "full_recording_sha256",
+    }:
+        acceptance["references"][0][case] = (
+            "different-control" if case == "neutral_alias" else "c" * 64
+        )
+        write_acceptance()
+    elif case in {
+        "fragment_expected_cluster_count",
+        "full_recording_expected_cluster_count",
+    }:
+        acceptance["references"][0][case] = 4
+        write_acceptance()
+    elif case == "fragment-count-float":
+        acceptance["references"][0]["fragment_expected_cluster_count"] = 2.0
+        write_acceptance()
+    elif case == "fragment-count-bool":
+        acceptance["references"][0]["fragment_expected_cluster_count"] = True
+        write_acceptance()
+    elif case == "fragment-count-string":
+        acceptance["references"][0]["fragment_expected_cluster_count"] = "2"
+        write_acceptance()
+    elif case == "full-count-float":
+        acceptance["references"][0][
+            "full_recording_expected_cluster_count"
+        ] = 2.0
+        write_acceptance()
+    elif case == "package-alias-type":
+        package["references"][0]["neutral_alias"] = 1
+        write_package()
+    elif case == "package-hash-type":
+        package["references"][0]["canonical_fragment_audio_sha256"] = 1
+        write_package()
+    elif case == "acceptance-hash-type":
+        acceptance["references"][0]["canonical_fragment_audio_sha256"] = 1
+        write_acceptance()
+    elif case in {
+        "fragment_review_complete",
+        "full_recording_count_review_complete",
+        "reference_accepted",
+    }:
+        acceptance["references"][0][case] = False
+        write_acceptance()
+    elif case == "fragment-review-int":
+        acceptance["references"][0]["fragment_review_complete"] = 1
+        write_acceptance()
+    elif case == "full-review-int":
+        acceptance["references"][0][
+            "full_recording_count_review_complete"
+        ] = 1
+        write_acceptance()
+    elif case == "reference-accepted-int":
+        acceptance["references"][0]["reference_accepted"] = 1
+        write_acceptance()
+    elif case == "acceptance-row-unknown":
+        acceptance["references"][0]["status"] = "approved"
+        write_acceptance()
+    elif case == "owner-package-binding":
+        acceptance["owner_package_sha256"] = "b" * 64
+        write_acceptance()
+    elif case == "step3-int":
+        acceptance["step3"]["recording_use_approved"] = 1
+        write_acceptance()
+    elif case.startswith("step3-"):
+        acceptance["step3"][case.removeprefix("step3-")] = False
+        write_acceptance()
+    elif case == "step3-missing":
+        del acceptance["step3"]["recording_use_approved"]
+        write_acceptance()
+    elif case == "step3-unknown":
+        acceptance["step3"]["count_review_approved"] = True
+        write_acceptance()
+    else:
+        raise AssertionError(f"unknown case: {case}")
+
+
 def test_preflight_validates_fresh_exact_schema_before_loading(tmp_path):
     manifest = _manifest(tmp_path)
     calls = []
@@ -213,6 +510,605 @@ def test_preflight_validates_fresh_exact_schema_before_loading(tmp_path):
     assert calls == []
 
 
+def test_complete_reference_owner_acceptance_is_required_before_loading(tmp_path):
+    manifest = _manifest(tmp_path)
+    calls = []
+
+    outcome = experiment.preflight_and_load(
+        manifest,
+        root=tmp_path,
+        environment_probe=_environment,
+        w0_loader=lambda: calls.append("w0"),
+        candidate_loader=lambda: calls.append("candidate"),
+    )
+
+    assert outcome.state == "valid"
+    assert calls == ["w0", "candidate"]
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "approval-missing",
+        "approval-null",
+        "approval-link-unknown",
+        "record-missing",
+        "record-path-missing",
+        "record-hash-mismatch",
+        "record-json-invalid",
+        "record-unknown-key",
+        "record-count-review-schema",
+        "actor",
+        "status",
+        "decision",
+        "timestamp-naive",
+        "timestamp-early",
+        "timestamp-link-mismatch",
+        "package-missing",
+        "package-link-unknown",
+        "package-file-missing",
+        "package-hash-mismatch",
+        "package-timestamp-mismatch",
+        "package-unknown-key",
+        "package-row-binding",
+        "package-row-omitted",
+        "package-row-duplicate",
+        "acceptance-row-omitted",
+        "acceptance-row-duplicate",
+        "neutral_alias",
+        "canonical_fragment_audio_sha256",
+        "final_reference_sha256",
+        "full_recording_sha256",
+        "fragment_expected_cluster_count",
+        "full_recording_expected_cluster_count",
+        "fragment-count-float",
+        "fragment-count-bool",
+        "fragment-count-string",
+        "full-count-float",
+        "package-alias-type",
+        "package-hash-type",
+        "acceptance-hash-type",
+        "fragment_review_complete",
+        "full_recording_count_review_complete",
+        "reference_accepted",
+        "fragment-review-int",
+        "full-review-int",
+        "reference-accepted-int",
+        "acceptance-row-unknown",
+        "owner-package-binding",
+        "step3-recording_use_approved",
+        "step3-inputs_and_counts_approved",
+        "step3-full_recordings_available",
+        "step3-final_hearing_gate_committed",
+        "step3-int",
+        "step3-missing",
+        "step3-unknown",
+    ],
+)
+def test_reference_owner_acceptance_failures_need_user_before_loaders(
+    tmp_path, case
+):
+    manifest = _manifest(tmp_path)
+    _mutate_owner_acceptance(manifest, tmp_path, case)
+    calls = []
+
+    outcome = experiment.preflight_and_load(
+        manifest,
+        root=tmp_path,
+        environment_probe=_environment,
+        w0_loader=lambda: calls.append("w0"),
+        candidate_loader=lambda: calls.append("candidate"),
+    )
+
+    assert outcome.state == "needs-user"
+    assert outcome.reason == "reference-owner-acceptance"
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    ("record", "original", "replacement"),
+    [
+        (
+            "approval",
+            b'"status": "approved"',
+            b'"status": "draft", "status": "approved"',
+        ),
+        (
+            "approval",
+            b'"reference_accepted": true',
+            b'"reference_accepted": false, "reference_accepted": true',
+        ),
+        (
+            "approval",
+            b'"recording_use_approved": true',
+            b'"recording_use_approved": false, "recording_use_approved": true',
+        ),
+        (
+            "owner_package",
+            b'"neutral_alias": "control-1"',
+            b'"neutral_alias": "other", "neutral_alias": "control-1"',
+        ),
+        (
+            "approval",
+            b'"fragment_expected_cluster_count": 2',
+            b'"fragment_expected_cluster_count": NaN',
+        ),
+    ],
+)
+def test_bound_owner_json_rejects_ambiguous_json_before_loaders(
+    tmp_path, record, original, replacement
+):
+    manifest = _manifest(tmp_path)
+    link = manifest["fresh_basis"][record]
+    path = tmp_path / str(link["path"])
+    payload = path.read_bytes().replace(original, replacement, 1)
+    assert payload != path.read_bytes()
+    _rewrite_linked_bytes(tmp_path, link, payload)
+    if record == "owner_package":
+        acceptance_link = manifest["fresh_basis"]["approval"]
+        acceptance = _read_linked_json(tmp_path, acceptance_link)
+        acceptance["owner_package_sha256"] = link["sha256"]
+        _rewrite_linked_json(tmp_path, acceptance_link, acceptance)
+    calls = []
+
+    outcome = experiment.preflight_and_load(
+        manifest,
+        root=tmp_path,
+        environment_probe=_environment,
+        w0_loader=lambda: calls.append("w0"),
+        candidate_loader=lambda: calls.append("candidate"),
+    )
+
+    assert outcome.state == "needs-user"
+    assert outcome.reason == "reference-owner-acceptance"
+    assert calls == []
+
+
+@pytest.mark.parametrize("symlink_kind", ["final", "intermediate"])
+def test_bound_owner_json_rejects_symlinks_before_loaders(
+    tmp_path, symlink_kind
+):
+    manifest = _manifest(tmp_path)
+    if symlink_kind == "final":
+        link = manifest["fresh_basis"]["approval"]
+        path = tmp_path / str(link["path"])
+        target = path.with_name("acceptance-target.json")
+        path.rename(target)
+        path.symlink_to(target.name)
+    else:
+        owner = tmp_path / "owner"
+        target = tmp_path / "owner-target"
+        owner.rename(target)
+        owner.symlink_to(target.name, target_is_directory=True)
+    calls = []
+
+    outcome = experiment.preflight_and_load(
+        manifest,
+        root=tmp_path,
+        environment_probe=_environment,
+        w0_loader=lambda: calls.append("w0"),
+        candidate_loader=lambda: calls.append("candidate"),
+    )
+
+    assert outcome.state == "needs-user"
+    assert outcome.reason == "reference-owner-acceptance"
+    assert calls == []
+
+
+def test_bound_owner_json_cannot_hash_one_version_and_parse_another(
+    tmp_path, monkeypatch
+):
+    manifest = _manifest(tmp_path)
+    link = manifest["fresh_basis"]["approval"]
+    path = tmp_path / str(link["path"])
+    approved_payload = path.read_bytes()
+    rejected_payload = approved_payload.replace(
+        b'"status": "approved"', b'"status": "draft"', 1
+    )
+    path.write_bytes(rejected_payload)
+    link["sha256"] = hashlib.sha256(rejected_payload).hexdigest()
+    original_file_sha256 = experiment.file_sha256
+    replaced = False
+
+    def replace_after_hash(candidate):
+        nonlocal replaced
+        digest = original_file_sha256(candidate)
+        if candidate == path and not replaced:
+            path.write_bytes(approved_payload)
+            replaced = True
+        return digest
+
+    monkeypatch.setattr(experiment, "file_sha256", replace_after_hash)
+    calls = []
+
+    outcome = experiment.preflight_and_load(
+        manifest,
+        root=tmp_path,
+        environment_probe=_environment,
+        w0_loader=lambda: calls.append("w0"),
+        candidate_loader=lambda: calls.append("candidate"),
+    )
+
+    assert outcome.state == "needs-user"
+    assert outcome.reason == "reference-owner-acceptance"
+    assert calls == []
+
+
+def test_bound_owner_json_rejects_path_replacement_during_held_read(
+    tmp_path, monkeypatch
+):
+    manifest = _manifest(tmp_path)
+    link = manifest["fresh_basis"]["approval"]
+    path = tmp_path / str(link["path"])
+    target_inode = path.stat().st_ino
+    replacement = path.with_name("replacement.json")
+    payload = path.read_bytes()
+    original_read = os.read
+    replaced = False
+
+    def replace_path_after_read(file_descriptor, count):
+        nonlocal replaced
+        chunk = original_read(file_descriptor, count)
+        if os.fstat(file_descriptor).st_ino == target_inode and not replaced:
+            replacement.write_bytes(payload)
+            os.replace(replacement, path)
+            replaced = True
+        return chunk
+
+    monkeypatch.setattr(experiment.os, "read", replace_path_after_read)
+    calls = []
+
+    outcome = experiment.preflight_and_load(
+        manifest,
+        root=tmp_path,
+        environment_probe=_environment,
+        w0_loader=lambda: calls.append("w0"),
+        candidate_loader=lambda: calls.append("candidate"),
+    )
+
+    assert replaced is True
+    assert outcome.state == "needs-user"
+    assert outcome.reason == "reference-owner-acceptance"
+    assert calls == []
+
+
+def test_bound_owner_json_rejects_in_place_mutation_during_held_read(
+    tmp_path, monkeypatch
+):
+    manifest = _manifest(tmp_path)
+    link = manifest["fresh_basis"]["approval"]
+    path = tmp_path / str(link["path"])
+    json_size = len(path.read_bytes().rstrip(b"\n"))
+    payload = path.read_bytes().rstrip(b"\n") + (b" " * 70_000) + b"\n"
+    _rewrite_linked_bytes(tmp_path, link, payload)
+    target_inode = path.stat().st_ino
+    original_read = os.read
+    mutated = False
+
+    def mutate_after_first_chunk(file_descriptor, count):
+        nonlocal mutated
+        chunk = original_read(file_descriptor, count)
+        if os.fstat(file_descriptor).st_ino == target_inode and not mutated:
+            writer = os.open(path, os.O_WRONLY)
+            try:
+                os.pwrite(writer, b"\t", json_size + 66_000)
+                os.fsync(writer)
+            finally:
+                os.close(writer)
+            mutated = True
+        return chunk
+
+    monkeypatch.setattr(experiment.os, "read", mutate_after_first_chunk)
+    calls = []
+
+    outcome = experiment.preflight_and_load(
+        manifest,
+        root=tmp_path,
+        environment_probe=_environment,
+        w0_loader=lambda: calls.append("w0"),
+        candidate_loader=lambda: calls.append("candidate"),
+    )
+
+    assert mutated is True
+    assert outcome.state == "needs-user"
+    assert outcome.reason == "reference-owner-acceptance"
+    assert calls == []
+
+
+def test_bound_owner_json_rejects_intermediate_directory_swap_during_read(
+    tmp_path, monkeypatch
+):
+    manifest = _manifest(tmp_path)
+    link = manifest["fresh_basis"]["owner_package"]
+    path = tmp_path / str(link["path"])
+    target_inode = path.stat().st_ino
+    parent = path.parent
+    moved_parent = parent.with_name("owner-original")
+    original_read = os.read
+    swapped = False
+
+    def swap_directory_after_read(file_descriptor, count):
+        nonlocal swapped
+        chunk = original_read(file_descriptor, count)
+        if os.fstat(file_descriptor).st_ino == target_inode and not swapped:
+            parent.rename(moved_parent)
+            parent.mkdir()
+            (parent / path.name).write_bytes(b"{}\n")
+            swapped = True
+        return chunk
+
+    monkeypatch.setattr(experiment.os, "read", swap_directory_after_read)
+    calls = []
+
+    outcome = experiment.preflight_and_load(
+        manifest,
+        root=tmp_path,
+        environment_probe=_environment,
+        w0_loader=lambda: calls.append("w0"),
+        candidate_loader=lambda: calls.append("candidate"),
+    )
+
+    assert swapped is True
+    assert outcome.state == "needs-user"
+    assert outcome.reason == "reference-owner-acceptance"
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    "binding",
+    [
+        "source",
+        "fragment",
+        "fragment-sidecar",
+        "reference",
+        "full-recording",
+        "full-sidecar",
+    ],
+)
+@pytest.mark.parametrize("symlink_kind", ["final", "intermediate"])
+def test_manifest_file_bindings_reject_internal_symlinks_before_loaders(
+    tmp_path, binding, symlink_kind
+):
+    manifest = _manifest(tmp_path)
+    path = tmp_path / _media_path(manifest, binding)
+    if symlink_kind == "final":
+        target = path.with_name(f"{path.name}.target")
+        path.rename(target)
+        path.symlink_to(target.name)
+    else:
+        parent = path.parent
+        target = parent.with_name(f"{parent.name}-target")
+        parent.rename(target)
+        parent.symlink_to(target.name, target_is_directory=True)
+    calls = []
+
+    with pytest.raises(experiment.PreflightError) as raised:
+        experiment.preflight_and_load(
+            manifest,
+            root=tmp_path,
+            environment_probe=_environment,
+            w0_loader=lambda: calls.append("w0"),
+            candidate_loader=lambda: calls.append("candidate"),
+        )
+
+    assert str(tmp_path) not in str(raised.value)
+    assert calls == []
+
+
+def test_manifest_file_binding_rejects_final_replacement_during_read(
+    tmp_path, monkeypatch
+):
+    manifest = _manifest(tmp_path)
+    path = tmp_path / _media_path(manifest, "fragment")
+    target_inode = path.stat().st_ino
+    replacement = path.with_name("replacement.wav")
+    original_read = os.read
+    replaced = False
+
+    def replace_path_after_read(file_descriptor, count):
+        nonlocal replaced
+        chunk = original_read(file_descriptor, count)
+        if os.fstat(file_descriptor).st_ino == target_inode and not replaced:
+            replacement.write_bytes(b"different-fragment-bytes")
+            os.replace(replacement, path)
+            replaced = True
+        return chunk
+
+    monkeypatch.setattr(experiment.os, "read", replace_path_after_read)
+    calls = []
+
+    with pytest.raises(experiment.PreflightError):
+        experiment.preflight_and_load(
+            manifest,
+            root=tmp_path,
+            environment_probe=_environment,
+            w0_loader=lambda: calls.append("w0"),
+            candidate_loader=lambda: calls.append("candidate"),
+        )
+
+    assert replaced is True
+    assert path.read_bytes() == b"different-fragment-bytes"
+    assert hashlib.sha256(path.read_bytes()).hexdigest() != manifest["inputs"][0][
+        "fragment"
+    ]["sha256"]
+    assert calls == []
+
+
+def test_manifest_file_binding_rejects_intermediate_directory_swap_during_read(
+    tmp_path, monkeypatch
+):
+    manifest = _manifest(tmp_path)
+    path = tmp_path / _media_path(manifest, "fragment")
+    target_inode = path.stat().st_ino
+    parent = path.parent
+    moved_parent = parent.with_name("media-original")
+    original_read = os.read
+    swapped = False
+
+    def swap_directory_after_read(file_descriptor, count):
+        nonlocal swapped
+        chunk = original_read(file_descriptor, count)
+        if os.fstat(file_descriptor).st_ino == target_inode and not swapped:
+            parent.rename(moved_parent)
+            parent.mkdir()
+            (parent / path.name).write_bytes(b"replacement-fragment")
+            swapped = True
+        return chunk
+
+    monkeypatch.setattr(experiment.os, "read", swap_directory_after_read)
+    calls = []
+
+    with pytest.raises(experiment.PreflightError):
+        experiment.preflight_and_load(
+            manifest,
+            root=tmp_path,
+            environment_probe=_environment,
+            w0_loader=lambda: calls.append("w0"),
+            candidate_loader=lambda: calls.append("candidate"),
+        )
+
+    assert swapped is True
+    assert calls == []
+
+
+def test_manifest_file_binding_rejects_in_place_mutation_during_read(
+    tmp_path, monkeypatch
+):
+    manifest = _manifest(tmp_path)
+    path = tmp_path / _media_path(manifest, "fragment")
+    target_inode = path.stat().st_ino
+    original_read = os.read
+    mutated = False
+
+    def mutate_file_after_read(file_descriptor, count):
+        nonlocal mutated
+        chunk = original_read(file_descriptor, count)
+        if os.fstat(file_descriptor).st_ino == target_inode and not mutated:
+            path.write_bytes(b"mutated-fragment-with-different-size")
+            mutated = True
+        return chunk
+
+    monkeypatch.setattr(experiment.os, "read", mutate_file_after_read)
+    calls = []
+
+    with pytest.raises(experiment.PreflightError):
+        experiment.preflight_and_load(
+            manifest,
+            root=tmp_path,
+            environment_probe=_environment,
+            w0_loader=lambda: calls.append("w0"),
+            candidate_loader=lambda: calls.append("candidate"),
+        )
+
+    assert mutated is True
+    assert calls == []
+
+
+def test_bound_file_verification_closes_descriptors_on_success_and_failure(
+    tmp_path
+):
+    proc_fds = Path("/proc/self/fd")
+    if not proc_fds.is_dir():
+        pytest.skip("fd accounting requires procfs")
+
+    manifest = _manifest(tmp_path)
+    before_success = len(list(proc_fds.iterdir()))
+    for _ in range(20):
+        assert experiment.validate_manifest(
+            manifest, root=tmp_path, environment=_environment()
+        ).state == "valid"
+    assert len(list(proc_fds.iterdir())) == before_success
+
+    failed_root = tmp_path / "failed"
+    failed_manifest = _manifest(failed_root)
+    path = failed_root / _media_path(failed_manifest, "fragment")
+    target = path.with_name("fragment-target.wav")
+    path.rename(target)
+    path.symlink_to(target.name)
+    before_failure = len(list(proc_fds.iterdir()))
+    for _ in range(20):
+        with pytest.raises(experiment.PreflightError):
+            experiment.validate_manifest(
+                failed_manifest,
+                root=failed_root,
+                environment=_environment(),
+            )
+    assert len(list(proc_fds.iterdir())) == before_failure
+
+
+@pytest.mark.parametrize(
+    "binding",
+    [
+        "source",
+        "fragment",
+        "fragment-sidecar",
+        "reference",
+        "full-recording",
+        "full-sidecar",
+        "owner-package",
+        "owner-acceptance",
+    ],
+)
+def test_manifest_file_bindings_reject_nul_paths_before_loaders(
+    tmp_path, binding
+):
+    manifest = _manifest(tmp_path)
+    _set_binding_path(manifest, binding, "private\x00binding")
+    calls = []
+
+    if binding.startswith("owner-"):
+        outcome = experiment.preflight_and_load(
+            manifest,
+            root=tmp_path,
+            environment_probe=_environment,
+            w0_loader=lambda: calls.append("w0"),
+            candidate_loader=lambda: calls.append("candidate"),
+        )
+        assert outcome.state == "needs-user"
+        assert outcome.reason == "reference-owner-acceptance"
+    else:
+        with pytest.raises(experiment.PreflightError, match="path-escape"):
+            experiment.preflight_and_load(
+                manifest,
+                root=tmp_path,
+                environment_probe=_environment,
+                w0_loader=lambda: calls.append("w0"),
+                candidate_loader=lambda: calls.append("candidate"),
+            )
+
+    assert calls == []
+
+
+def test_manifest_file_binding_redacts_path_layer_value_error(
+    tmp_path, monkeypatch
+):
+    manifest = _manifest(tmp_path)
+    original_open = os.open
+
+    def reject_component(path, flags, *, dir_fd=None):
+        if path == "sources":
+            raise ValueError("private path detail")
+        if dir_fd is None:
+            return original_open(path, flags)
+        return original_open(path, flags, dir_fd=dir_fd)
+
+    monkeypatch.setattr(experiment.os, "open", reject_component)
+    calls = []
+
+    with pytest.raises(experiment.PreflightError) as raised:
+        experiment.preflight_and_load(
+            manifest,
+            root=tmp_path,
+            environment_probe=_environment,
+            w0_loader=lambda: calls.append("w0"),
+            candidate_loader=lambda: calls.append("candidate"),
+        )
+
+    assert str(raised.value) == "path-escape"
+    assert "private" not in str(raised.value)
+    assert calls == []
+
+
 def test_missing_owner_approval_is_needs_user_and_never_loads(tmp_path):
     manifest = _manifest(tmp_path)
     manifest["fresh_basis"]["approval"] = None
@@ -227,7 +1123,7 @@ def test_missing_owner_approval_is_needs_user_and_never_loads(tmp_path):
     )
 
     assert outcome.state == "needs-user"
-    assert outcome.reason == "owner-approval-required"
+    assert outcome.reason == "reference-owner-acceptance"
     assert calls == []
 
 
@@ -243,6 +1139,10 @@ def test_missing_owner_approval_is_needs_user_and_never_loads(tmp_path):
         lambda value: value["inputs"][0]["fragment"].update(duration_seconds=299.9),
         lambda value: value["inputs"][0]["full_recording"].update(
             expected_cluster_count=5
+        ),
+        lambda value: value["inputs"][0].update(neutral_alias=""),
+        lambda value: value["inputs"][1].update(
+            neutral_alias=value["inputs"][0]["neutral_alias"]
         ),
         lambda value: value["source"].update(commit="b" * 40),
     ],
@@ -1305,6 +2205,35 @@ def test_invalid_cli_output_has_one_trailing_newline(tmp_path, capsys):
     output = capsys.readouterr().out
     assert output.endswith("\n")
     assert not output.endswith("\n\n")
+
+
+def test_validate_only_cli_redacts_nul_path_failure(
+    tmp_path, capsys, monkeypatch
+):
+    manifest = _manifest(tmp_path)
+    manifest["inputs"][0]["source_path"] = "private\x00source.wav"
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    monkeypatch.setattr(
+        experiment,
+        "git_environment_probe",
+        lambda _repository_root: _environment(),
+    )
+
+    with pytest.raises(SystemExit) as raised:
+        experiment.main(["--manifest", str(manifest_path), "--validate-only"])
+
+    captured = capsys.readouterr()
+    assert raised.value.code == 2
+    assert json.loads(captured.out) == {
+        "reason": "path-escape",
+        "state": "invalid",
+    }
+    assert captured.err == ""
+    assert "Traceback" not in captured.out
+    assert "\x00" not in captured.out
+    assert "private" not in captured.out
+    assert str(tmp_path) not in captured.out
 
 
 def test_child_process_request_result_seam_uses_atomic_private_files(tmp_path):

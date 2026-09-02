@@ -5,11 +5,13 @@ from __future__ import annotations
 import argparse
 import copy
 import ctypes
+import errno
 import hashlib
 import json
 import math
 import os
 import re
+import stat
 import statistics
 import subprocess
 import sys
@@ -44,10 +46,51 @@ TOP_LEVEL_KEYS = {
     "schedule",
     "rss_sample_interval_ms",
 }
-FRESH_BASIS_KEYS = {"marker", "approval"}
-APPROVAL_KEYS = {"decision", "timestamp"}
+FRESH_BASIS_KEYS = {"marker", "owner_package", "approval"}
+OWNER_PACKAGE_LINK_KEYS = {"path", "sha256", "generated_at"}
+APPROVAL_LINK_KEYS = {
+    "path",
+    "sha256",
+    "actor",
+    "status",
+    "decision",
+    "timestamp",
+}
+OWNER_PACKAGE_SCHEMA = "local-transcriber.owner-listening-package.v1"
+OWNER_PACKAGE_KEYS = {"schema", "generated_at", "references"}
+OWNER_PACKAGE_REFERENCE_KEYS = {
+    "neutral_alias",
+    "canonical_fragment_audio_sha256",
+    "final_reference_sha256",
+    "full_recording_sha256",
+}
+REFERENCE_ACCEPTANCE_SCHEMA = "local-transcriber.reference-owner-acceptance.v1"
+REFERENCE_ACCEPTANCE_KEYS = {
+    "schema",
+    "actor",
+    "status",
+    "decision",
+    "timestamp",
+    "owner_package_sha256",
+    "references",
+    "step3",
+}
+REFERENCE_ACCEPTANCE_ROW_KEYS = OWNER_PACKAGE_REFERENCE_KEYS | {
+    "fragment_expected_cluster_count",
+    "full_recording_expected_cluster_count",
+    "fragment_review_complete",
+    "full_recording_count_review_complete",
+    "reference_accepted",
+}
+STEP3_KEYS = {
+    "recording_use_approved",
+    "inputs_and_counts_approved",
+    "full_recordings_available",
+    "final_hearing_gate_committed",
+}
 SOURCE_KEYS = {"commit"}
 INPUT_KEYS = {
+    "neutral_alias",
     "source_path",
     "source_sha256",
     "source_size_bytes",
@@ -312,45 +355,294 @@ def build_full_recording_schedule(
     return result
 
 
-def _resolve(root: Path, value: Any) -> Path:
+def _aware_datetime(value: Any) -> datetime:
+    if not isinstance(value, str):
+        raise PreflightError("approval-timestamp")
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise PreflightError("approval-timestamp") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise PreflightError("approval-timestamp")
+    return parsed
+
+
+def _safe_relative_parts(value: Any) -> tuple[str, ...]:
     if not isinstance(value, str) or not value:
         raise PreflightError("unsafe-relative-path")
     pure = PurePosixPath(value)
-    if pure.is_absolute() or ".." in pure.parts or "\\" in value:
+    if (
+        pure.is_absolute()
+        or not pure.parts
+        or ".." in pure.parts
+        or "\\" in value
+        or "\x00" in value
+    ):
         raise PreflightError("path-escape")
-    base = root.resolve()
-    resolved = (base / Path(value)).resolve()
-    if not resolved.is_relative_to(base):
-        raise PreflightError("path-escape")
-    return resolved
+    return pure.parts
+
+
+def _same_file_state(before: os.stat_result, after: os.stat_result) -> bool:
+    return (
+        before.st_dev,
+        before.st_ino,
+        before.st_mode,
+        before.st_nlink,
+        before.st_size,
+        before.st_mtime_ns,
+        before.st_ctime_ns,
+    ) == (
+        after.st_dev,
+        after.st_ino,
+        after.st_mode,
+        after.st_nlink,
+        after.st_size,
+        after.st_mtime_ns,
+        after.st_ctime_ns,
+    )
+
+
+@dataclass(frozen=True)
+class _BoundFile:
+    sha256: str
+    size_bytes: int
+    payload: bytes | None
+
+
+def _read_bound_regular_file(
+    root: Path, path_value: Any, *, capture_payload: bool
+) -> _BoundFile:
+    """Читает файл относительно доверенного неизменяемого root dirfd."""
+    parts = _safe_relative_parts(path_value)
+    directory_flags = (
+        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+    )
+    opened_fds: list[int] = []
+    fd_states: list[tuple[int, os.stat_result]] = []
+    namespace_entries: list[tuple[int, str, os.stat_result]] = []
+    try:
+        directory_fd = os.open(root, directory_flags)
+        opened_fds.append(directory_fd)
+        root_state = os.fstat(directory_fd)
+        if not stat.S_ISDIR(root_state.st_mode):
+            raise PreflightError("file-binding")
+        fd_states.append((directory_fd, root_state))
+        for part in parts[:-1]:
+            parent_fd = directory_fd
+            directory_fd = os.open(part, directory_flags, dir_fd=parent_fd)
+            opened_fds.append(directory_fd)
+            directory_state = os.fstat(directory_fd)
+            if not stat.S_ISDIR(directory_state.st_mode):
+                raise PreflightError("file-binding")
+            fd_states.append((directory_fd, directory_state))
+            namespace_entries.append((parent_fd, part, directory_state))
+        file_fd = os.open(
+            parts[-1],
+            os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC,
+            dir_fd=directory_fd,
+        )
+        opened_fds.append(file_fd)
+        file_state = os.fstat(file_fd)
+        if not stat.S_ISREG(file_state.st_mode) or file_state.st_nlink != 1:
+            raise PreflightError("file-binding")
+        fd_states.append((file_fd, file_state))
+        namespace_entries.append((directory_fd, parts[-1], file_state))
+
+        digest = hashlib.sha256()
+        size_bytes = 0
+        chunks: list[bytes] | None = [] if capture_payload else None
+        while chunk := os.read(file_fd, 64 * 1024):
+            digest.update(chunk)
+            size_bytes += len(chunk)
+            if chunks is not None:
+                chunks.append(chunk)
+
+        for file_descriptor, original_state in fd_states:
+            if not _same_file_state(original_state, os.fstat(file_descriptor)):
+                raise PreflightError("file-binding")
+        for parent_fd, name, original_state in namespace_entries:
+            current_state = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+            if not _same_file_state(original_state, current_state):
+                raise PreflightError("file-binding")
+        if size_bytes != file_state.st_size:
+            raise PreflightError("file-binding")
+        return _BoundFile(
+            sha256=digest.hexdigest(),
+            size_bytes=size_bytes,
+            payload=b"".join(chunks) if chunks is not None else None,
+        )
+    except PreflightError:
+        raise
+    except ValueError as exc:
+        raise PreflightError("path-escape") from exc
+    except OSError as exc:
+        reason = (
+            "path-escape"
+            if exc.errno in {errno.ELOOP, errno.ENOTDIR}
+            else "file-binding"
+        )
+        raise PreflightError(reason) from exc
+    finally:
+        for opened_fd in reversed(opened_fds):
+            try:
+                os.close(opened_fd)
+            except OSError:
+                pass
 
 
 def _verify(root: Path, path_value: Any, expected_hash: Any, size: Any | None) -> None:
-    path = _resolve(root, path_value)
     expected = _sha(expected_hash, "invalid-sha256")
-    if not path.is_file():
-        raise PreflightError("file-unavailable")
-    if size is not None and path.stat().st_size != _positive_int(size, "invalid-size"):
+    expected_size = None if size is None else _positive_int(size, "invalid-size")
+    bound = _read_bound_regular_file(root, path_value, capture_payload=False)
+    if expected_size is not None and bound.size_bytes != expected_size:
         raise PreflightError("size-mismatch")
-    if file_sha256(path) != expected:
+    if bound.sha256 != expected:
         raise PreflightError("hash-mismatch")
 
 
-def _validate_approval(value: Any) -> bool:
-    if value is None:
-        return False
-    approval = _exact(value, APPROVAL_KEYS, "approval-schema")
-    if approval["decision"] != "approved":
-        return False
-    timestamp = approval["timestamp"]
-    if not isinstance(timestamp, str):
-        raise PreflightError("approval-timestamp")
+def _strict_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    value: dict[str, Any] = {}
+    for key, item in pairs:
+        if key in value:
+            raise PreflightError("owner-acceptance-record")
+        value[key] = item
+    return value
+
+
+def _reject_json_constant(_value: str) -> None:
+    raise PreflightError("owner-acceptance-record")
+
+
+def _bound_json(
+    root: Path, link: Mapping[str, Any], link_keys: set[str]
+) -> Mapping[str, Any]:
+    value = _exact(link, link_keys, "owner-acceptance-link")
+    expected_sha256 = _sha(value["sha256"], "owner-acceptance-hash")
+    bound = _read_bound_regular_file(root, value["path"], capture_payload=True)
+    if bound.sha256 != expected_sha256:
+        raise PreflightError("owner-acceptance-hash")
+    if bound.payload is None:
+        raise PreflightError("owner-acceptance-record")
     try:
-        parsed = datetime.fromisoformat(timestamp)
-    except ValueError as exc:
-        raise PreflightError("approval-timestamp") from exc
-    if parsed.tzinfo is None:
-        raise PreflightError("approval-timestamp")
+        loaded = json.loads(
+            bound.payload,
+            object_pairs_hook=_strict_json_object,
+            parse_constant=_reject_json_constant,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise PreflightError("owner-acceptance-record") from exc
+    if not isinstance(loaded, Mapping):
+        raise PreflightError("owner-acceptance-record")
+    return loaded
+
+
+def _validate_owner_package_row(row: Any) -> None:
+    value = _exact(row, OWNER_PACKAGE_REFERENCE_KEYS, "owner-package-reference")
+    alias = value["neutral_alias"]
+    if (
+        not isinstance(alias, str)
+        or re.fullmatch(r"[a-z][a-z0-9-]{0,63}", alias) is None
+    ):
+        raise PreflightError("owner-package-reference")
+    for key in OWNER_PACKAGE_REFERENCE_KEYS - {"neutral_alias"}:
+        _sha(value[key], "owner-package-reference")
+
+
+def _validate_acceptance_row(row: Any) -> None:
+    value = _exact(
+        row,
+        REFERENCE_ACCEPTANCE_ROW_KEYS,
+        "owner-acceptance-reference",
+    )
+    _validate_owner_package_row(
+        {key: value[key] for key in OWNER_PACKAGE_REFERENCE_KEYS}
+    )
+    for key in (
+        "fragment_expected_cluster_count",
+        "full_recording_expected_cluster_count",
+    ):
+        count = value[key]
+        if type(count) is not int or not 2 <= count <= 4:
+            raise PreflightError("owner-acceptance-reference")
+    for key in (
+        "fragment_review_complete",
+        "full_recording_count_review_complete",
+        "reference_accepted",
+    ):
+        if value[key] is not True:
+            raise PreflightError("owner-acceptance-reference")
+
+
+def _validate_reference_owner_acceptance(
+    *,
+    root: Path,
+    basis: Mapping[str, Any],
+    expected_package_rows: Sequence[Mapping[str, Any]],
+    expected_acceptance_rows: Sequence[Mapping[str, Any]],
+) -> bool:
+    try:
+        package_link = _exact(
+            basis["owner_package"],
+            OWNER_PACKAGE_LINK_KEYS,
+            "owner-package-link",
+        )
+        package = _exact(
+            _bound_json(root, package_link, OWNER_PACKAGE_LINK_KEYS),
+            OWNER_PACKAGE_KEYS,
+            "owner-package-schema",
+        )
+        if package["schema"] != OWNER_PACKAGE_SCHEMA:
+            raise PreflightError("owner-package-schema")
+        package_generated_at = _aware_datetime(package["generated_at"])
+        if package["generated_at"] != package_link["generated_at"]:
+            raise PreflightError("owner-package-timestamp")
+        package_rows = package["references"]
+        if not isinstance(package_rows, list) or len(package_rows) != 3:
+            raise PreflightError("owner-package-references")
+        for row in package_rows:
+            _validate_owner_package_row(row)
+        if package_rows != list(expected_package_rows):
+            raise PreflightError("owner-package-binding")
+
+        approval_link = _exact(
+            basis["approval"], APPROVAL_LINK_KEYS, "owner-acceptance-link"
+        )
+        acceptance = _exact(
+            _bound_json(root, approval_link, APPROVAL_LINK_KEYS),
+            REFERENCE_ACCEPTANCE_KEYS,
+            "owner-acceptance-schema",
+        )
+        if acceptance["schema"] != REFERENCE_ACCEPTANCE_SCHEMA:
+            raise PreflightError("owner-acceptance-schema")
+        for key in ("actor", "status", "decision", "timestamp"):
+            if acceptance[key] != approval_link[key]:
+                raise PreflightError("owner-acceptance-link-mismatch")
+        if (
+            acceptance["actor"] != "owner"
+            or acceptance["status"] != "approved"
+            or acceptance["decision"] != "approved"
+        ):
+            raise PreflightError("owner-acceptance-decision")
+        accepted_at = _aware_datetime(acceptance["timestamp"])
+        if accepted_at <= package_generated_at:
+            raise PreflightError("owner-acceptance-timestamp")
+        if (
+            _sha(acceptance["owner_package_sha256"], "owner-package-binding")
+            != package_link["sha256"]
+        ):
+            raise PreflightError("owner-package-binding")
+        acceptance_rows = acceptance["references"]
+        if not isinstance(acceptance_rows, list) or len(acceptance_rows) != 3:
+            raise PreflightError("owner-acceptance-references")
+        for row in acceptance_rows:
+            _validate_acceptance_row(row)
+        if acceptance_rows != list(expected_acceptance_rows):
+            raise PreflightError("owner-acceptance-binding")
+        step3 = _exact(acceptance["step3"], STEP3_KEYS, "owner-acceptance-step3")
+        if any(step3[key] is not True for key in STEP3_KEYS):
+            raise PreflightError("owner-acceptance-step3")
+    except (KeyError, OSError, TypeError, PreflightError):
+        return False
     return True
 
 
@@ -457,10 +749,12 @@ def validate_manifest(
             raise PreflightError("legacy-identity")
         raise PreflightError("legacy-root")
 
-    basis = _exact(value["fresh_basis"], FRESH_BASIS_KEYS, "fresh-basis-schema")
-    if basis["marker"] != FRESH_BASIS_MARKER:
+    basis = value["fresh_basis"]
+    if not isinstance(basis, Mapping):
+        raise PreflightError("fresh-basis-schema")
+    if basis.get("marker") != FRESH_BASIS_MARKER:
         raise PreflightError("fresh-basis-marker")
-    approved = _validate_approval(basis["approval"])
+    basis_schema_valid = set(basis) == FRESH_BASIS_KEYS
     source = _exact(value["source"], SOURCE_KEYS, "source-schema")
     source_commit = _commit(source["commit"], "source-commit")
     if set(environment) != {"commit", "clean"}:
@@ -486,8 +780,18 @@ def validate_manifest(
         raise PreflightError("source-hashes-not-unique")
     fragment_hashes = []
     fragment_sidecars = []
+    package_rows = []
+    acceptance_rows = []
+    aliases = []
     for item in inputs:
         entry = _exact(item, INPUT_KEYS, "input-schema")
+        alias = entry["neutral_alias"]
+        if (
+            not isinstance(alias, str)
+            or re.fullmatch(r"[a-z][a-z0-9-]{0,63}", alias) is None
+        ):
+            raise PreflightError("neutral-alias")
+        aliases.append(alias)
         if verify_files:
             _verify(
                 root,
@@ -522,11 +826,40 @@ def validate_manifest(
                         record["reference_sha256"],
                         None,
                     )
+        package_row = {
+            "neutral_alias": alias,
+            "canonical_fragment_audio_sha256": entry["fragment"]["sha256"],
+            "final_reference_sha256": entry["fragment"]["reference_sha256"],
+            "full_recording_sha256": entry["full_recording"]["sha256"],
+        }
+        package_rows.append(package_row)
+        acceptance_rows.append(
+            {
+                **package_row,
+                "fragment_expected_cluster_count": entry["fragment"][
+                    "expected_cluster_count"
+                ],
+                "full_recording_expected_cluster_count": entry["full_recording"][
+                    "expected_cluster_count"
+                ],
+                "fragment_review_complete": True,
+                "full_recording_count_review_complete": True,
+                "reference_accepted": True,
+            }
+        )
+    if len(set(aliases)) != 3:
+        raise PreflightError("neutral-alias")
     _validate_schedule(value["schedule"], fragment_hashes, fragment_sidecars)
     _positive_int(value["rss_sample_interval_ms"], "rss-sample-interval")
+    approved = basis_schema_valid and _validate_reference_owner_acceptance(
+        root=root,
+        basis=basis,
+        expected_package_rows=package_rows,
+        expected_acceptance_rows=acceptance_rows,
+    )
     return PreflightOutcome(
         state="valid" if approved else "needs-user",
-        reason=None if approved else "owner-approval-required",
+        reason=None if approved else "reference-owner-acceptance",
         fragment_count=3,
         full_recording_count=3,
         source_commit_sha256=hashlib.sha256(source_commit.encode("ascii")).hexdigest(),
