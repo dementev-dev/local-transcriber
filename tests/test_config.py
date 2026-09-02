@@ -41,6 +41,23 @@ def test_load_config_valid(tmp_path):
     assert result == {"model": "small", "language": "ru"}
 
 
+@pytest.mark.parametrize("value", [True, False])
+def test_load_config_accepts_diarize_boolean(tmp_path, value):
+    config = tmp_path / "config.toml"
+    config.write_text(f"diarize = {str(value).lower()}\n")
+
+    assert load_config(config) == {"diarize": value}
+
+
+@pytest.mark.parametrize("toml_value", ['"true"', "1"])
+def test_load_config_rejects_non_boolean_diarize(tmp_path, toml_value):
+    config = tmp_path / "config.toml"
+    config.write_text(f"diarize = {toml_value}\n")
+
+    with pytest.raises(ValueError, match="должно быть логическим"):
+        load_config(config)
+
+
 def test_load_config_malformed(tmp_path):
     config = tmp_path / "config.toml"
     config.write_text("this is not valid toml [[[")
@@ -100,7 +117,24 @@ def test_resolve_defaults_hardcoded_fallback():
         "language": "ru",
         "device": "auto",
         "compute_type": "float32",
+        "diarize": False,
     }
+
+
+@pytest.mark.parametrize(
+    ("cli_value", "config_value", "expected"),
+    [
+        (None, True, True),
+        (None, False, False),
+        (True, False, True),
+        (False, True, False),
+    ],
+)
+def test_resolve_defaults_diarize_priority(cli_value, config_value, expected):
+    cli = {"diarize": cli_value}
+    config = {"diarize": config_value}
+
+    assert resolve_defaults(cli, config)["diarize"] is expected
 
 
 def test_apply_device_defaults_cuda():

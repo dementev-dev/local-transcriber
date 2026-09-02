@@ -223,8 +223,8 @@ transcribe --uninstall-menu
 | `--device` | `-d` | `auto` | Устройство (auto, cpu, cuda, openvino, openvino-gpu, openvino-cpu, onnx) |
 | `--compute-type` | — | float16 (CUDA) / int8 (ONNX/OpenVINO) / float32 (CPU) | Тип вычислений |
 | `--threads` | `-t` | 0 (авто) | Потоки CPU (рекомендуется = число физ. ядер) |
-| `--diarize` | — | — | Разделить текст на реплики говорящих |
-| `--speakers` | — | авто | Ожидаемое число говорящих; включает `--diarize` |
+| `--diarize` / `--no-diarize` | — | `false` | Включить или отключить разделение на реплики говорящих |
+| `--speakers` | — | авто | Ожидаемое число говорящих; включает диаризацию и несовместим с `--no-diarize` |
 | `--force` | `-f` | — | Перезаписать существующие транскрипты |
 | `--verbose` | `-v` | — | Подробный вывод |
 
@@ -282,6 +282,7 @@ device = "openvino-cpu"
 model = "large-v3-turbo"
 compute_type = "int8"
 language = "ru"
+diarize = true
 ```
 
 Порядок поиска:
@@ -289,6 +290,8 @@ language = "ru"
 2. `~/.config/transcriber/config.toml`
 
 Приоритет: **CLI-аргумент > конфиг > device-aware дефолт > встроенный дефолт**.
+`--diarize` и `--no-diarize` позволяют переопределить `diarize` из конфига для
+отдельного запуска.
 
 При `device = "auto"` выбирается CUDA, если доступен `nvidia-smi`, иначе ONNX.
 Явный `device` из CLI или конфига отключает этот автоматический выбор.

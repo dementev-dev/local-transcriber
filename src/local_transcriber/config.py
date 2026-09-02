@@ -4,11 +4,14 @@ import tomllib
 import warnings
 from pathlib import Path
 
-HARDCODED_DEFAULTS: dict[str, str] = {
+type ConfigValue = str | bool
+
+HARDCODED_DEFAULTS: dict[str, ConfigValue] = {
     "model": "medium",
     "language": "ru",
     "device": "auto",
     "compute_type": "float32",
+    "diarize": False,
 }
 
 DEVICE_DEFAULTS: dict[str, dict[str, str]] = {
@@ -46,7 +49,7 @@ def find_config_file() -> Path | None:
     return None
 
 
-def load_config(path: Path | None = None) -> dict[str, str]:
+def load_config(path: Path | None = None) -> dict[str, ConfigValue]:
     """Загружает и валидирует TOML-конфиг.
 
     Неизвестные ключи вызывают предупреждение (а не ошибку) для forward
@@ -70,11 +73,19 @@ def load_config(path: Path | None = None) -> dict[str, str]:
             stacklevel=2,
         )
 
-    result: dict[str, str] = {}
+    result: dict[str, ConfigValue] = {}
     for key in _VALID_KEYS:
         if key not in data:
             continue
         value = data[key]
+        if key == "diarize":
+            if not isinstance(value, bool):
+                raise ValueError(
+                    f"Значение 'diarize' в {path} должно быть логическим, "
+                    f"получено {type(value).__name__}"
+                )
+            result[key] = value
+            continue
         if not isinstance(value, str):
             raise ValueError(
                 f"Значение '{key}' в {path} должно быть строкой, получено {type(value).__name__}"
@@ -92,10 +103,10 @@ def load_config(path: Path | None = None) -> dict[str, str]:
 
 
 def resolve_defaults(
-    cli_values: dict[str, str | None], config: dict[str, str]
-) -> dict[str, str]:
+    cli_values: dict[str, ConfigValue | None], config: dict[str, ConfigValue]
+) -> dict[str, ConfigValue]:
     """Каскад приоритетов: CLI > конфиг-файл > hardcoded-дефолты."""
-    result: dict[str, str] = {}
+    result: dict[str, ConfigValue] = {}
     for key in HARDCODED_DEFAULTS:
         cli_val = cli_values.get(key)
         if cli_val is not None:
@@ -108,11 +119,11 @@ def resolve_defaults(
 
 
 def apply_device_defaults(
-    defaults: dict[str, str],
+    defaults: dict[str, ConfigValue],
     resolved_device: str,
-    cli_values: dict[str, str | None],
-    config: dict[str, str],
-) -> dict[str, str]:
+    cli_values: dict[str, ConfigValue | None],
+    config: dict[str, ConfigValue],
+) -> dict[str, ConfigValue]:
     """Применяет device-aware дефолты для model и compute_type,
     если они не были явно заданы через CLI или конфиг."""
     device_defs = DEVICE_DEFAULTS.get(resolved_device, {})
