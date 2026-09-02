@@ -11,7 +11,13 @@ import typer
 from rich.console import Console
 from rich.status import Status
 
-from .config import ConfigValue, apply_device_defaults, load_config, resolve_defaults
+from .config import (
+    CliValues,
+    ResolvedConfig,
+    apply_device_defaults,
+    load_config,
+    resolve_defaults,
+)
 from .context_menu import install_menu as install_context_menu
 from .context_menu import uninstall_menu as uninstall_context_menu
 from .diarization import build_speaker_transcript
@@ -337,7 +343,7 @@ def main(
 
     try:
         config = load_config()
-        cli_values = {
+        cli_values: CliValues = {
             "model": model,
             "language": language,
             "device": device,
@@ -417,7 +423,7 @@ def main(
 
 def _run_single(
     file: Path,
-    defaults: dict[str, ConfigValue],
+    defaults: ResolvedConfig,
     output: Path | None,
     verbose: bool,
     compute_type_explicit: bool = False,
@@ -561,7 +567,7 @@ def _run_single(
 
 def _run_batch(
     files: list[Path],
-    defaults: dict[str, ConfigValue],
+    defaults: ResolvedConfig,
     verbose: bool,
     force: bool,
     compute_type_explicit: bool = False,
