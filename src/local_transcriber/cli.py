@@ -11,7 +11,13 @@ import typer
 from rich.console import Console
 from rich.status import Status
 
-from .config import apply_device_defaults, load_config, resolve_defaults
+from .config import (
+    CliValues,
+    ResolvedConfig,
+    apply_device_defaults,
+    load_config,
+    resolve_defaults,
+)
 from .context_menu import install_menu as install_context_menu
 from .context_menu import uninstall_menu as uninstall_context_menu
 from .diarization import build_speaker_transcript
@@ -261,9 +267,9 @@ def main(
         min=0,
         help="Потоки CPU (0 = дефолт библиотеки; рекомендуется = число физ. ядер)",
     ),
-    diarize: bool = typer.Option(
-        False,
-        "--diarize",
+    diarize: bool | None = typer.Option(
+        None,
+        "--diarize/--no-diarize",
         help="Разделить транскрипт на реплики говорящих",
     ),
     speakers: int | None = typer.Option(
@@ -328,15 +334,24 @@ def main(
         )
         raise SystemExit(2)
 
+    if diarize is False and speakers is not None:
+        console.print(
+            "--no-diarize и --speakers несовместимы.",
+            style="red bold",
+        )
+        raise SystemExit(2)
+
     try:
         config = load_config()
-        cli_values = {
+        cli_values: CliValues = {
             "model": model,
             "language": language,
             "device": device,
             "compute_type": compute_type,
+            "diarize": diarize,
         }
         defaults = resolve_defaults(cli_values, config)
+        diarize_enabled = defaults["diarize"] is True or speakers is not None
 
         resolved_device = detect_device(defaults["device"])
         defaults = apply_device_defaults(defaults, resolved_device, cli_values, config)
@@ -363,7 +378,7 @@ def main(
                 force,
                 ct_explicit,
                 cpu_threads=threads,
-                diarize=diarize or speakers is not None,
+                diarize=diarize_enabled,
                 speakers=speakers,
             )
         else:
@@ -374,7 +389,7 @@ def main(
                 verbose,
                 ct_explicit,
                 cpu_threads=threads,
-                diarize=diarize or speakers is not None,
+                diarize=diarize_enabled,
                 speakers=speakers,
             )
     except KeyboardInterrupt:
@@ -408,7 +423,7 @@ def main(
 
 def _run_single(
     file: Path,
-    defaults: dict[str, str],
+    defaults: ResolvedConfig,
     output: Path | None,
     verbose: bool,
     compute_type_explicit: bool = False,
@@ -552,7 +567,7 @@ def _run_single(
 
 def _run_batch(
     files: list[Path],
-    defaults: dict[str, str],
+    defaults: ResolvedConfig,
     verbose: bool,
     force: bool,
     compute_type_explicit: bool = False,

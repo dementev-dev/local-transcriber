@@ -519,6 +519,27 @@ def test_cli_rejects_nonpositive_speaker_count(tmp_path):
     assert out.exit_code == 2
 
 
+def test_cli_rejects_no_diarize_with_speakers_before_model_load(tmp_path):
+    audio = tmp_path / "meeting.mp3"
+    audio.write_bytes(b"fake")
+    load_model = MagicMock()
+
+    with (
+        patch("local_transcriber.cli.load_config", return_value={}),
+        patch("local_transcriber.cli.validate_input_file", return_value=audio),
+        patch("local_transcriber.cli.detect_device", return_value="cpu"),
+        patch("local_transcriber.cli.load_model", load_model),
+    ):
+        out = runner.invoke(
+            app,
+            [str(audio), "--no-diarize", "--speakers", "2"],
+        )
+
+    assert out.exit_code == 2
+    assert "--no-diarize и --speakers несовместимы" in out.output
+    load_model.assert_not_called()
+
+
 def test_cli_verbose_passes_on_segment_callback(tmp_path):
     audio = tmp_path / "test.mp3"
     audio.write_bytes(b"fake")
@@ -917,7 +938,13 @@ def test_cli_batch_two_files(tmp_path):
     assert "2 обработано" in out.output
 
 
-def test_cli_batch_reuses_one_diarizer_for_all_nonempty_files(tmp_path):
+@pytest.mark.parametrize(
+    ("config", "cli_args"),
+    [({}, ["--diarize"]), ({"diarize": True}, [])],
+)
+def test_cli_batch_reuses_one_diarizer_for_all_nonempty_files(
+    tmp_path, config, cli_args
+):
     first = tmp_path / "first.mp3"
     second = tmp_path / "second.mp3"
     first.write_bytes(b"fake")
@@ -941,7 +968,7 @@ def test_cli_batch_reuses_one_diarizer_for_all_nonempty_files(tmp_path):
     )
 
     with (
-        patch("local_transcriber.cli.load_config", return_value={}),
+        patch("local_transcriber.cli.load_config", return_value=config),
         patch(
             "local_transcriber.cli.validate_input_file",
             side_effect=lambda path: path,
@@ -958,7 +985,7 @@ def test_cli_batch_reuses_one_diarizer_for_all_nonempty_files(tmp_path):
         ) as load_diarizer,
         patch("local_transcriber.cli.write_transcript") as write,
     ):
-        out = runner.invoke(app, [str(first), str(second), "--diarize"])
+        out = runner.invoke(app, [str(first), str(second), *cli_args])
 
     assert out.exit_code == 0
     load_diarizer.assert_called_once()
@@ -1230,6 +1257,48 @@ def test_cli_config_applied(tmp_path):
 
     # load_model receives model name from config
     assert mock_load_model.call_args[0][0] == "tiny"
+
+
+@pytest.mark.parametrize(
+    ("config_value", "cli_args", "expected_calls"),
+    [
+        (True, [], 1),
+        (False, [], 0),
+        (False, ["--diarize"], 1),
+        (True, ["--no-diarize"], 0),
+    ],
+)
+def test_cli_resolves_diarization_priority(
+    tmp_path, config_value, cli_args, expected_calls
+):
+    audio = tmp_path / "meeting.mp3"
+    audio.write_bytes(b"fake")
+    result = _make_result(segments=[])
+    model = _make_model()
+    backend = _make_backend()
+    backend.word_timestamps_available = True
+    tfr = _make_tfr(result=result, model=model, backend=backend)
+    load_diarizer = MagicMock()
+
+    with (
+        patch(
+            "local_transcriber.cli.load_config",
+            return_value={"diarize": config_value},
+        ),
+        patch("local_transcriber.cli.validate_input_file", return_value=audio),
+        patch("local_transcriber.cli.detect_device", return_value="cpu"),
+        patch(
+            "local_transcriber.cli.load_model",
+            return_value=(model, "cpu", backend, "/models/medium"),
+        ),
+        patch("local_transcriber.cli._transcribe_file", return_value=tfr),
+        patch("local_transcriber.cli.load_speaker_diarizer", load_diarizer),
+        patch("local_transcriber.cli.write_transcript"),
+    ):
+        out = runner.invoke(app, [str(audio), *cli_args])
+
+    assert out.exit_code == 0
+    assert load_diarizer.call_count == expected_calls
 
 
 def test_cli_config_overrides_auto_device(tmp_path):

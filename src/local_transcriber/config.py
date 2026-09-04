@@ -3,12 +3,48 @@
 import tomllib
 import warnings
 from pathlib import Path
+from typing import TypedDict, TypeVar, cast
 
-HARDCODED_DEFAULTS: dict[str, str] = {
+type ConfigValue = str | bool
+_T = TypeVar("_T")
+
+
+class ConfigValues(TypedDict, total=False):
+    """Проверенные значения из TOML-конфига."""
+
+    model: str
+    language: str
+    device: str
+    compute_type: str
+    diarize: bool
+
+
+class CliValues(TypedDict, total=False):
+    """Явные значения CLI до разрешения каскада."""
+
+    model: str | None
+    language: str | None
+    device: str | None
+    compute_type: str | None
+    diarize: bool | None
+
+
+class ResolvedConfig(TypedDict):
+    """Полная конфигурация после разрешения каскада."""
+
+    model: str
+    language: str
+    device: str
+    compute_type: str
+    diarize: bool
+
+
+HARDCODED_DEFAULTS: ResolvedConfig = {
     "model": "medium",
     "language": "ru",
     "device": "auto",
     "compute_type": "float32",
+    "diarize": False,
 }
 
 DEVICE_DEFAULTS: dict[str, dict[str, str]] = {
@@ -46,7 +82,7 @@ def find_config_file() -> Path | None:
     return None
 
 
-def load_config(path: Path | None = None) -> dict[str, str]:
+def load_config(path: Path | None = None) -> ConfigValues:
     """Загружает и валидирует TOML-конфиг.
 
     Неизвестные ключи вызывают предупреждение (а не ошибку) для forward
@@ -70,11 +106,19 @@ def load_config(path: Path | None = None) -> dict[str, str]:
             stacklevel=2,
         )
 
-    result: dict[str, str] = {}
+    result: dict[str, ConfigValue] = {}
     for key in _VALID_KEYS:
         if key not in data:
             continue
         value = data[key]
+        if key == "diarize":
+            if not isinstance(value, bool):
+                raise ValueError(
+                    f"Значение 'diarize' в {path} должно быть логическим, "
+                    f"получено {type(value).__name__}"
+                )
+            result[key] = value
+            continue
         if not isinstance(value, str):
             raise ValueError(
                 f"Значение '{key}' в {path} должно быть строкой, получено {type(value).__name__}"
@@ -88,31 +132,53 @@ def load_config(path: Path | None = None) -> dict[str, str]:
             raise ValueError(f"Значение 'language' в {path} не может быть пустым")
         result[key] = value
 
-    return result
+    return cast(ConfigValues, result)
 
 
-def resolve_defaults(
-    cli_values: dict[str, str | None], config: dict[str, str]
-) -> dict[str, str]:
+def resolve_defaults(cli_values: CliValues, config: ConfigValues) -> ResolvedConfig:
     """Каскад приоритетов: CLI > конфиг-файл > hardcoded-дефолты."""
-    result: dict[str, str] = {}
-    for key in HARDCODED_DEFAULTS:
-        cli_val = cli_values.get(key)
-        if cli_val is not None:
-            result[key] = cli_val
-        elif key in config:
-            result[key] = config[key]
-        else:
-            result[key] = HARDCODED_DEFAULTS[key]
-    return result
+    return {
+        "model": _resolve_value(
+            cli_values.get("model"), config.get("model"), HARDCODED_DEFAULTS["model"]
+        ),
+        "language": _resolve_value(
+            cli_values.get("language"),
+            config.get("language"),
+            HARDCODED_DEFAULTS["language"],
+        ),
+        "device": _resolve_value(
+            cli_values.get("device"),
+            config.get("device"),
+            HARDCODED_DEFAULTS["device"],
+        ),
+        "compute_type": _resolve_value(
+            cli_values.get("compute_type"),
+            config.get("compute_type"),
+            HARDCODED_DEFAULTS["compute_type"],
+        ),
+        "diarize": _resolve_value(
+            cli_values.get("diarize"),
+            config.get("diarize"),
+            HARDCODED_DEFAULTS["diarize"],
+        ),
+    }
+
+
+def _resolve_value(cli_value: _T | None, config_value: _T | None, default: _T) -> _T:
+    """Выбирает первое явно заданное значение каскада."""
+    if cli_value is not None:
+        return cli_value
+    if config_value is not None:
+        return config_value
+    return default
 
 
 def apply_device_defaults(
-    defaults: dict[str, str],
+    defaults: ResolvedConfig,
     resolved_device: str,
-    cli_values: dict[str, str | None],
-    config: dict[str, str],
-) -> dict[str, str]:
+    cli_values: CliValues,
+    config: ConfigValues,
+) -> ResolvedConfig:
     """Применяет device-aware дефолты для model и compute_type,
     если они не были явно заданы через CLI или конфиг."""
     device_defs = DEVICE_DEFAULTS.get(resolved_device, {})
@@ -124,4 +190,4 @@ def apply_device_defaults(
         if cli_values.get(key) is None and key not in config:
             if key in device_defs:
                 result[key] = device_defs[key]
-    return result
+    return cast(ResolvedConfig, result)
