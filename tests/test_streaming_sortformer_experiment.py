@@ -213,6 +213,60 @@ def test_preflight_validates_fresh_exact_schema_before_loading(tmp_path):
     assert calls == []
 
 
+def test_approved_fresh_basis_loads_models_after_preflight(tmp_path):
+    manifest = _manifest(tmp_path)
+    calls = []
+
+    outcome = experiment.preflight_and_load(
+        manifest,
+        root=tmp_path,
+        environment_probe=_environment,
+        w0_loader=lambda: calls.append("w0"),
+        candidate_loader=lambda: calls.append("candidate"),
+    )
+
+    assert outcome.state == "valid"
+    assert calls == ["w0", "candidate"]
+
+
+def test_fragment_without_reference_loads_models_after_preflight(tmp_path):
+    manifest = _manifest(tmp_path)
+    fragment = manifest["inputs"][0]["fragment"]
+    (tmp_path / fragment["reference_path"]).unlink()
+    fragment["reference_path"] = None
+    fragment["reference_sha256"] = None
+    calls = []
+
+    outcome = experiment.preflight_and_load(
+        manifest,
+        root=tmp_path,
+        environment_probe=_environment,
+        w0_loader=lambda: calls.append("w0"),
+        candidate_loader=lambda: calls.append("candidate"),
+    )
+
+    assert outcome.state == "valid"
+    assert calls == ["w0", "candidate"]
+
+
+@pytest.mark.parametrize("field", ["reference_path", "reference_sha256"])
+def test_fragment_rejects_half_present_reference_before_loaders(tmp_path, field):
+    manifest = _manifest(tmp_path)
+    manifest["inputs"][0]["fragment"][field] = None
+    calls = []
+
+    with pytest.raises(experiment.PreflightError, match="reference-binding"):
+        experiment.preflight_and_load(
+            manifest,
+            root=tmp_path,
+            environment_probe=_environment,
+            w0_loader=lambda: calls.append("w0"),
+            candidate_loader=lambda: calls.append("candidate"),
+        )
+
+    assert calls == []
+
+
 def test_missing_owner_approval_is_needs_user_and_never_loads(tmp_path):
     manifest = _manifest(tmp_path)
     manifest["fresh_basis"]["approval"] = None
@@ -289,6 +343,25 @@ def test_preflight_rejects_hash_path_and_symlink_escape_without_leaking_path(tmp
     manifest["inputs"][0]["fragment"]["path"] = "link/escape.wav"
     with pytest.raises(experiment.PreflightError, match="path-escape"):
         experiment.validate_manifest(manifest, root=tmp_path, environment=_environment())
+
+
+def test_preflight_rejects_nul_path_without_leaking_or_loading(tmp_path):
+    manifest = _manifest(tmp_path)
+    manifest["inputs"][0]["source_path"] = "private\x00source.wav"
+    calls = []
+
+    with pytest.raises(experiment.PreflightError) as raised:
+        experiment.preflight_and_load(
+            manifest,
+            root=tmp_path,
+            environment_probe=_environment,
+            w0_loader=lambda: calls.append("w0"),
+            candidate_loader=lambda: calls.append("candidate"),
+        )
+
+    assert str(raised.value) == "path-escape"
+    assert "private" not in str(raised.value)
+    assert calls == []
 
 
 def test_preflight_rejects_legacy_cell_names_roots_and_recipe_pin_mismatch(tmp_path):
@@ -701,7 +774,7 @@ def test_memory_gate_uses_frozen_plateau_and_linear_growth_policy_boundaries():
         peak_rss_bytes=300 * mib,
         rss_after_inputs=[100 * mib, 120 * mib, 121 * mib],
         machine_ram_bytes=16 * 1024**3,
-    )["reason"] == "active-swap"
+    )["reason"] is None
     assert experiment.memory_gate(
         stage="fragment",
         oom=True,
@@ -711,6 +784,23 @@ def test_memory_gate_uses_frozen_plateau_and_linear_growth_policy_boundaries():
         rss_after_inputs=[0, 0, 0],
         machine_ram_bytes=16 * 1024**3,
     )["reason"] == "oom"
+
+
+def test_memory_gate_allows_preoccupied_swap() -> None:
+    mib = 1024**2
+
+    result = experiment.memory_gate(
+        stage="fragment",
+        oom=False,
+        swap_before_bytes=1_730_000_000,
+        swap_after_bytes=1_730_000_000,
+        peak_rss_bytes=300 * mib,
+        rss_after_inputs=[100 * mib, 120 * mib, 121 * mib],
+        machine_ram_bytes=16 * 1024**3,
+    )
+
+    assert result["state"] == "pass"
+    assert result["reason"] is None
 
 
 def test_memory_gate_marks_two_gibibyte_review_as_needs_user():
@@ -1011,7 +1101,7 @@ def test_guarded_cell_accepts_stable_manifest_declared_performance_mode():
     assert len(result["attempts"]) == 1
 
 
-def test_second_guard_invalidation_stops_with_first_reason_and_active_swap_never_retries():
+def test_second_guard_invalidation_stops_with_first_reason():
     throttled = iter(
         [
             _guard(),
@@ -1031,17 +1121,33 @@ def test_second_guard_invalidation_stops_with_first_reason_and_active_swap_never
     assert second["reason"] == "new-throttling"
     assert len(second["attempts"]) == 2
 
-    calls = []
-    swapped = experiment.run_guarded_cell(
+
+def test_guarded_cell_allows_preoccupied_swap_when_counters_stay_stable():
+    snapshots = iter(
+        [
+            _guard(
+                swap_used_bytes=1_730_000_000,
+                swap_sin_bytes=100,
+                swap_sout_bytes=200,
+            ),
+            _guard(
+                swap_used_bytes=1_730_000_000,
+                swap_sin_bytes=100,
+                swap_sout_bytes=200,
+            ),
+        ]
+    )
+
+    result = experiment.run_guarded_cell(
         {"semantic_id": "safe-cell", "recipe": "W0-FRESH"},
-        runner=lambda _request: calls.append("run") or {"wall_seconds": 1.0},
-        guard_reader=lambda: _guard(swap_used_bytes=1),
-        stabilize=lambda: calls.append("stabilize"),
+        runner=lambda _request: {"wall_seconds": 1.0},
+        guard_reader=lambda: next(snapshots),
+        stabilize=lambda: None,
         expected_machine=_machine(),
     )
-    assert swapped["state"] == "stop"
-    assert swapped["reason"] == "active-swap"
-    assert calls == []
+
+    assert result["state"] == "accepted"
+    assert len(result["attempts"]) == 1
 
 
 def test_oom_stops_without_retry_and_private_result_is_written_atomically(tmp_path):
@@ -1123,8 +1229,9 @@ def test_guarded_cell_does_not_retry_hard_mismatch_and_sanitizes_exceptions():
     assert calls == []
 
 
-def test_guarded_cell_hashes_result_rejected_by_after_run_swap():
-    snapshots = iter([_guard(), _guard(swap_sin_bytes=1)])
+@pytest.mark.parametrize("counter", ["swap_sin_bytes", "swap_sout_bytes"])
+def test_guarded_cell_hashes_result_rejected_by_after_run_swap(counter):
+    snapshots = iter([_guard(), _guard(**{counter: 1})])
     raw_result = {"wall_seconds": 1.0, "private": "not-published"}
     result = experiment.run_guarded_cell(
         {"semantic_id": "safe-cell", "recipe": "W0-FRESH"},

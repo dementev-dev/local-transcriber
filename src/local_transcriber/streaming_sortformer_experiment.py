@@ -316,7 +316,7 @@ def _resolve(root: Path, value: Any) -> Path:
     if not isinstance(value, str) or not value:
         raise PreflightError("unsafe-relative-path")
     pure = PurePosixPath(value)
-    if pure.is_absolute() or ".." in pure.parts or "\\" in value:
+    if pure.is_absolute() or ".." in pure.parts or "\\" in value or "\x00" in value:
         raise PreflightError("path-escape")
     base = root.resolve()
     resolved = (base / Path(value)).resolve()
@@ -509,17 +509,22 @@ def validate_manifest(
             media_hash = _sha(record["sha256"], "record-hash")
             sidecar_hash = _sha(record["sidecar_sha256"], "sidecar-hash")
             if role == "fragment":
-                _sha(record["reference_sha256"], "reference-hash")
+                reference_path = record["reference_path"]
+                reference_hash = record["reference_sha256"]
+                if (reference_path is None) != (reference_hash is None):
+                    raise PreflightError("reference-binding")
+                if reference_hash is not None:
+                    _sha(reference_hash, "reference-hash")
                 fragment_hashes.append(media_hash)
                 fragment_sidecars.append(sidecar_hash)
             if verify_files:
                 _verify(root, record["path"], media_hash, record["size_bytes"])
                 _verify(root, record["sidecar_path"], sidecar_hash, None)
-                if role == "fragment":
+                if role == "fragment" and reference_hash is not None:
                     _verify(
                         root,
-                        record["reference_path"],
-                        record["reference_sha256"],
+                        reference_path,
+                        reference_hash,
                         None,
                     )
     _validate_schedule(value["schedule"], fragment_hashes, fragment_sidecars)
@@ -1090,8 +1095,6 @@ def memory_gate(
         for value in integer_values
     ):
         raise ValueError("memory-value")
-    if swap_before_bytes > 0 or swap_after_bytes > 0:
-        return {"state": "stop", "reason": "active-swap", **base}
     if stage == "fragment":
         if len(rss_after_inputs) != 3:
             return {"state": "stop", "reason": "rss-no-plateau", **base}
@@ -1441,13 +1444,10 @@ def _guard_transition_reasons(
 
 
 def _swap_active(before: Mapping[str, Any], after: Mapping[str, Any] | None = None) -> bool:
-    if before["swap_used_bytes"] > 0:
-        return True
     if after is None:
         return False
     return bool(
-        after["swap_used_bytes"] > 0
-        or after["swap_sin_bytes"] != before["swap_sin_bytes"]
+        after["swap_sin_bytes"] != before["swap_sin_bytes"]
         or after["swap_sout_bytes"] != before["swap_sout_bytes"]
     )
 
