@@ -7,4 +7,4 @@ dist/
 .codex
 .qwen/
 tmp
-.scratch/handoffs/
+/.scratch/
