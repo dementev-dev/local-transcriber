@@ -774,7 +774,7 @@ def test_memory_gate_uses_frozen_plateau_and_linear_growth_policy_boundaries():
         peak_rss_bytes=300 * mib,
         rss_after_inputs=[100 * mib, 120 * mib, 121 * mib],
         machine_ram_bytes=16 * 1024**3,
-    )["reason"] == "active-swap"
+    )["reason"] is None
     assert experiment.memory_gate(
         stage="fragment",
         oom=True,
@@ -784,6 +784,23 @@ def test_memory_gate_uses_frozen_plateau_and_linear_growth_policy_boundaries():
         rss_after_inputs=[0, 0, 0],
         machine_ram_bytes=16 * 1024**3,
     )["reason"] == "oom"
+
+
+def test_memory_gate_allows_preoccupied_swap() -> None:
+    mib = 1024**2
+
+    result = experiment.memory_gate(
+        stage="fragment",
+        oom=False,
+        swap_before_bytes=1_730_000_000,
+        swap_after_bytes=1_730_000_000,
+        peak_rss_bytes=300 * mib,
+        rss_after_inputs=[100 * mib, 120 * mib, 121 * mib],
+        machine_ram_bytes=16 * 1024**3,
+    )
+
+    assert result["state"] == "pass"
+    assert result["reason"] is None
 
 
 def test_memory_gate_marks_two_gibibyte_review_as_needs_user():
@@ -1084,7 +1101,7 @@ def test_guarded_cell_accepts_stable_manifest_declared_performance_mode():
     assert len(result["attempts"]) == 1
 
 
-def test_second_guard_invalidation_stops_with_first_reason_and_active_swap_never_retries():
+def test_second_guard_invalidation_stops_with_first_reason():
     throttled = iter(
         [
             _guard(),
@@ -1104,17 +1121,33 @@ def test_second_guard_invalidation_stops_with_first_reason_and_active_swap_never
     assert second["reason"] == "new-throttling"
     assert len(second["attempts"]) == 2
 
-    calls = []
-    swapped = experiment.run_guarded_cell(
+
+def test_guarded_cell_allows_preoccupied_swap_when_counters_stay_stable():
+    snapshots = iter(
+        [
+            _guard(
+                swap_used_bytes=1_730_000_000,
+                swap_sin_bytes=100,
+                swap_sout_bytes=200,
+            ),
+            _guard(
+                swap_used_bytes=1_730_000_000,
+                swap_sin_bytes=100,
+                swap_sout_bytes=200,
+            ),
+        ]
+    )
+
+    result = experiment.run_guarded_cell(
         {"semantic_id": "safe-cell", "recipe": "W0-FRESH"},
-        runner=lambda _request: calls.append("run") or {"wall_seconds": 1.0},
-        guard_reader=lambda: _guard(swap_used_bytes=1),
-        stabilize=lambda: calls.append("stabilize"),
+        runner=lambda _request: {"wall_seconds": 1.0},
+        guard_reader=lambda: next(snapshots),
+        stabilize=lambda: None,
         expected_machine=_machine(),
     )
-    assert swapped["state"] == "stop"
-    assert swapped["reason"] == "active-swap"
-    assert calls == []
+
+    assert result["state"] == "accepted"
+    assert len(result["attempts"]) == 1
 
 
 def test_oom_stops_without_retry_and_private_result_is_written_atomically(tmp_path):
@@ -1196,8 +1229,9 @@ def test_guarded_cell_does_not_retry_hard_mismatch_and_sanitizes_exceptions():
     assert calls == []
 
 
-def test_guarded_cell_hashes_result_rejected_by_after_run_swap():
-    snapshots = iter([_guard(), _guard(swap_sin_bytes=1)])
+@pytest.mark.parametrize("counter", ["swap_sin_bytes", "swap_sout_bytes"])
+def test_guarded_cell_hashes_result_rejected_by_after_run_swap(counter):
+    snapshots = iter([_guard(), _guard(**{counter: 1})])
     raw_result = {"wall_seconds": 1.0, "private": "not-published"}
     result = experiment.run_guarded_cell(
         {"semantic_id": "safe-cell", "recipe": "W0-FRESH"},

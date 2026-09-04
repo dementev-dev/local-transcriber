@@ -1095,8 +1095,6 @@ def memory_gate(
         for value in integer_values
     ):
         raise ValueError("memory-value")
-    if swap_before_bytes > 0 or swap_after_bytes > 0:
-        return {"state": "stop", "reason": "active-swap", **base}
     if stage == "fragment":
         if len(rss_after_inputs) != 3:
             return {"state": "stop", "reason": "rss-no-plateau", **base}
@@ -1446,13 +1444,10 @@ def _guard_transition_reasons(
 
 
 def _swap_active(before: Mapping[str, Any], after: Mapping[str, Any] | None = None) -> bool:
-    if before["swap_used_bytes"] > 0:
-        return True
     if after is None:
         return False
     return bool(
-        after["swap_used_bytes"] > 0
-        or after["swap_sin_bytes"] != before["swap_sin_bytes"]
+        after["swap_sin_bytes"] != before["swap_sin_bytes"]
         or after["swap_sout_bytes"] != before["swap_sout_bytes"]
     )
 
