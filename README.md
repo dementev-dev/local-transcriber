@@ -26,13 +26,31 @@ curl -LsSf https://astral.sh/uv/install.sh | sh          # Linux / macOS
 powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"  # Windows
 ```
 
-**2. Установить transcriber:**
+После установки откройте новую консоль, чтобы перечитались переменные окружения.
+
+**2. Установить transcriber.** Напрямую из git, без скачивания исходников:
 
 ```bash
 uv tool install --python 3.13 git+https://git.dementev.space/ddmitry/local-transcriber.git
 ```
 
-**3. Ускорение (ставится автоматически):**
+Или из клона репозитория (`<URL>` — адрес репозитория, из которого вы ставите):
+
+```bash
+git clone <URL>
+cd local-transcriber
+uv tool install --python 3.13 .
+```
+
+**3. Пункт `Transcribe` в меню «Отправить»** (Windows, по желанию):
+
+```bash
+transcribe --install-menu
+```
+
+Подробнее — в разделе [контекстное меню проводника](#контекстное-меню-проводника-windows).
+
+**4. Ускорение (ставится автоматически):**
 
 - **NVIDIA CUDA** (GPU): если есть GPU — транскрипция в 5-10× быстрее
   - **Windows**: `winget install -e --id Nvidia.CUDA --version 12.9` (от администратора), перезапустить терминал
@@ -45,7 +63,7 @@ uv tool install --python 3.13 git+https://git.dementev.space/ddmitry/local-trans
 - **OpenVINO** для Intel GPU или x86 CPU остаётся доступен через явный
   `--device openvino`, `--device openvino-gpu` или `--device openvino-cpu`
 
-**4. Готово:**
+**5. Готово:**
 
 ```bash
 transcribe meeting.mp4
@@ -64,6 +82,13 @@ transcribe meeting.mp4
 
 ```bash
 uv tool install --python 3.13 --force git+https://git.dementev.space/ddmitry/local-transcriber.git
+```
+
+Или в папке со склонированным репозиторием:
+
+```bash
+git pull
+uv tool install --python 3.13 --force .
 ```
 
 **Удаление:**
