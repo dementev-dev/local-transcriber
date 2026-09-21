@@ -59,7 +59,9 @@ preload всё равно выполняется до создания CUDA-мо
 Явный `device` из CLI или TOML передаёт `strict_device=True` при загрузке и
 транскрипции. CUDA не заменяется молча на CPU. Подсказки различают отсутствие
 библиотек, проблемы драйвера, несовместимость GPU/runtime и нехватку памяти;
-исходное сообщение сохраняется. Неизвестная ошибка не получает произвольный
+отказ по неподдерживаемому типу вычислений учитывает устройство, чтобы
+одинаковая ошибка CTranslate2 на CPU не получала CUDA-подсказку. Исходное
+сообщение сохраняется. Неизвестная ошибка не получает произвольный
 совет установить Toolkit. Это одинаково для одного файла и батча.
 
 Прежний механизм fallback оркестратора при `strict_device=False` сохранён
@@ -82,8 +84,11 @@ preload всё равно выполняется до создания CUDA-мо
 - `nvidia_cublas_cu12-12.9.1.4-py3-none-win_amd64.whl`, SHA-256
   `1e5fee10662e6e52bd71dec533fbbd4971bb70a5f24f3bc3793e5c2e9dc640bf`.
   DLL находятся в `nvidia/cublas/bin`. cuBLAS импортирует cuBLAS Lt и
-  KERNEL32; cuBLAS Lt импортирует KERNEL32. `nvblas64_12.dll` не требуется
-  проверенному пути CTranslate2.
+  KERNEL32; cuBLAS Lt импортирует KERNEL32. В строках cuBLAS Lt также найдена
+  динамическая ссылка на `nvrtc64_120_0.dll`, которой нет в PE imports.
+  Обязательность NVRTC для Whisper этим статическим анализом не установлена;
+  первый реальный Windows-прогон должен проверить и этот путь загрузки.
+  `nvblas64_12.dll` не требуется проверенному пути CTranslate2.
 
 Основания: [CTranslate2 4.8.1 на PyPI](https://pypi.org/project/ctranslate2/4.8.1/#files),
 [cuBLAS 12.9.1.4 на PyPI](https://pypi.org/project/nvidia-cublas-cu12/12.9.1.4/#files),
@@ -97,7 +102,7 @@ Windows API не заменяют такую проверку.
 
 ## Проверка поставки и поведения
 
-На Linux выполнены `uv run pytest`: 500 passed, 2 skipped. Пропуски —
+На Linux выполнены `uv run pytest`: 524 passed, 2 skipped. Пропуски —
 Windows-only кодировка OEM и интеграционный bootstrap без optional-пакета.
 До удаления cuBLAS интеграционный тест Linux bootstrap проходил.
 Обычный `uv sync --locked` удаляет прежнюю обязательную cuBLAS;

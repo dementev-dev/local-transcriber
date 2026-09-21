@@ -195,9 +195,17 @@ def _is_cuda_error(exc: BaseException) -> bool:
     return any(k in msg for k in ("cuda", "cublas", "cudnn", "out of memory"))
 
 
-def cuda_error_hint(exc: BaseException) -> str | None:
+def cuda_error_hint(exc: BaseException, *, device: str | None = None) -> str | None:
     """Подсказывает действие только для распознанной причины CUDA-ошибки."""
     msg = str(exc).lower()
+    if device == "cuda" and "requested " in msg and "compute type" in msg and (
+        "do not support efficient" in msg
+    ):
+        return (
+            "Тип вычислений несовместим с выбранным GPU/CUDA runtime. "
+            "Установка extra не добавит аппаратную поддержку. Выберите "
+            "поддерживаемый --compute-type или --device onnx / --device cpu."
+        )
     if any(k in msg for k in (
         "no kernel image", "invalid device function", "unsupported gpu",
         "cublas_status_arch_mismatch", "cuda_error_no_binary_for_gpu",

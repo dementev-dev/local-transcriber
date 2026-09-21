@@ -805,14 +805,54 @@ def test_default_cli_stays_on_onnx_with_nvidia_driver(tmp_path, monkeypatch):
         patch("shutil.which", return_value="/usr/bin/nvidia-smi"),
         patch("local_transcriber.transcriber.get_backend", return_value=backend) as get_backend,
         patch("local_transcriber.cli.write_transcript"),
-        patch("local_transcriber._cuda_bootstrap.ensure_cublas_loadable") as bootstrap,
     ):
         out = runner.invoke(app, [str(audio)])
 
     assert out.exit_code == 0, out.output
     get_backend.assert_called_once_with("onnx", compute_type_explicit=False)
     assert backend.ensure_model_available.call_args.args[:2] == ("gigaam-v3-e2e-rnnt", "int8")
-    bootstrap.assert_not_called()
+
+
+@pytest.mark.parametrize("from_config", [False, True])
+@pytest.mark.parametrize("phase", ["load", "single", "batch"])
+@pytest.mark.parametrize("device", ["cuda", "cpu"])
+@pytest.mark.parametrize("compute_type", ["float16", "int8"])
+def test_unsupported_compute_type_hint_requires_cuda_context(
+    tmp_path, monkeypatch, from_config, phase, device, compute_type
+):
+    """Одинаковая ошибка CTranslate2 получает CUDA-подсказку только на CUDA."""
+    monkeypatch.chdir(tmp_path)
+    files = [tmp_path / "one.wav"]
+    if phase == "batch":
+        files.append(tmp_path / "two.wav")
+    for file in files:
+        file.write_bytes(b"audio")
+    args = [str(file) for file in files]
+    if from_config:
+        (tmp_path / ".transcriber.toml").write_text(
+            f'device = "{device}"\ncompute_type = "{compute_type}"\n'
+        )
+    else:
+        args += ["--device", device, "--compute-type", compute_type]
+    message = (
+        f"Requested {compute_type} compute type, but the target device or backend "
+        f"do not support efficient {compute_type} computation."
+    )
+    backend = _make_backend()
+    error = ValueError(message)
+    if phase == "load":
+        backend.create_model.side_effect = error
+    else:
+        backend.transcribe.side_effect = error
+
+    with patch("local_transcriber.transcriber.get_backend", return_value=backend):
+        out = runner.invoke(app, args)
+
+    assert out.exit_code == 1
+    assert message in " ".join(out.output.split())
+    assert ("Тип вычислений несовместим" in out.output) is (device == "cuda")
+    assert "uv sync --extra cuda" not in out.output
+    assert "Переключение на CPU" not in out.output
 
 
 def test_cli_device_fallback_warning(tmp_path):

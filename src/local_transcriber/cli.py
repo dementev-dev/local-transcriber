@@ -65,9 +65,9 @@ app = typer.Typer()
 console = Console(stderr=True)
 
 
-def _print_cuda_hint(exc: BaseException) -> None:
+def _print_cuda_hint(exc: BaseException, device: str | None = None) -> None:
     """Показывает подсказку, не заменяя исходную ошибку."""
-    hint = cuda_error_hint(exc)
+    hint = cuda_error_hint(exc, device=device)
     if hint:
         console.print(hint, style="yellow", markup=False)
 
@@ -348,6 +348,7 @@ def main(
         )
         raise SystemExit(2)
 
+    resolved_device: str | None = None
     try:
         config = load_config()
         cli_values: CliValues = {
@@ -405,15 +406,15 @@ def main(
     except SystemExit:
         raise
     except ValueError as exc:
-        _print_cuda_hint(exc)
+        _print_cuda_hint(exc, resolved_device)
         console.print(f"Ошибка: {exc}", style="red bold")
         raise SystemExit(1)
     except (FileNotFoundError,) as exc:
-        _print_cuda_hint(exc)
+        _print_cuda_hint(exc, resolved_device)
         console.print(f"Ошибка: {exc}", style="red bold")
         raise SystemExit(1)
     except Exception as exc:
-        _print_cuda_hint(exc)
+        _print_cuda_hint(exc, resolved_device)
         if verbose:
             console.print_exception()
         else:
@@ -759,7 +760,7 @@ def _run_batch(
         except KeyboardInterrupt:
             raise
         except Exception as exc:
-            _print_cuda_hint(exc)
+            _print_cuda_hint(exc, actual_device)
             if verbose:
                 console.print_exception()
             else:
