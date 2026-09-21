@@ -48,10 +48,71 @@ def test_ensure_cublas_loads_library(monkeypatch, tmp_path):
     assert calls[0][1] == ctypes.RTLD_GLOBAL
 
 
-def test_ensure_cublas_skips_non_linux(monkeypatch):
-    """На не-Linux платформах -- no-op."""
-    monkeypatch.setattr(sys, "platform", "win32")
+def test_ensure_cublas_skips_macos(monkeypatch):
+    """На macOS bootstrap не загружает CUDA."""
+    monkeypatch.setattr(sys, "platform", "darwin")
     ensure_cublas_loadable()  # не должно бросать исключений
+
+
+def test_windows_optional_package_absent(monkeypatch):
+    """Windows работает без extra и не меняет поиск DLL."""
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setitem(sys.modules, "nvidia.cublas", None)
+    ensure_cublas_loadable()
+
+
+@pytest.mark.parametrize("broken", [False, True])
+def test_windows_preloads_dlls_and_keeps_handles(monkeypatch, tmp_path, broken):
+    """DLL загружаются по порядку один раз, ошибки не скрываются."""
+    from local_transcriber import _cuda_bootstrap as bootstrap
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    nvidia = types.ModuleType("nvidia")
+    nvidia.__path__ = []
+    cublas = types.ModuleType("nvidia.cublas")
+    cublas.__path__ = [str(tmp_path)]
+    nvidia.cublas = cublas
+    monkeypatch.setitem(sys.modules, "nvidia", nvidia)
+    monkeypatch.setitem(sys.modules, "nvidia.cublas", cublas)
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(bootstrap, "_dll_directories", {})
+    monkeypatch.setattr(bootstrap, "_dll_libraries", {})
+    calls = []
+    directory_handle = object()
+    library_handle = object()
+    failure = OSError("cublas64_12.dll: dependency not found")
+
+    def add_directory(path):
+        calls.append(("directory", path))
+        return directory_handle
+
+    def load_library(path):
+        calls.append(("load", path))
+        if broken:
+            raise failure
+        return library_handle
+
+    monkeypatch.setattr(os, "add_dll_directory", add_directory, raising=False)
+    monkeypatch.setattr(ctypes, "WinDLL", load_library, raising=False)
+    original_path = os.environ.get("PATH")
+
+    if broken:
+        with pytest.raises(OSError) as caught:
+            ensure_cublas_loadable()
+        assert caught.value is failure
+        assert bootstrap._dll_libraries == {}
+    else:
+        ensure_cublas_loadable()
+        ensure_cublas_loadable()
+        assert calls == [
+            ("directory", str(bin_dir)),
+            ("load", str(bin_dir / "cublasLt64_12.dll")),
+            ("load", str(bin_dir / "cublas64_12.dll")),
+        ]
+        assert list(bootstrap._dll_libraries.values()) == [library_handle] * 2
+    assert bootstrap._dll_directories[str(bin_dir)] is directory_handle
+    assert os.environ.get("PATH") == original_path
 
 
 def _nvidia_cublas_installed() -> bool:

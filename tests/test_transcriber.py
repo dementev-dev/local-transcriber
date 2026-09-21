@@ -7,6 +7,7 @@ from local_transcriber.transcriber import (
     Segment,
     TranscribeResult,
     _transcribe_file,
+    cuda_error_hint,
     ensure_model_available,
     load_model,
     transcribe,
@@ -14,6 +15,21 @@ from local_transcriber.transcriber import (
 from local_transcriber.types import WordTimestampsUnavailableError
 
 # === Helpers ===
+
+
+@pytest.mark.parametrize(
+    "error",
+    [RuntimeError("out of memory"), RuntimeError("CUDA unknown error")],
+)
+def test_unknown_error_does_not_suggest_cuda_installation(error):
+    """CPU OOM и неизвестная причина не получают совет по установке CUDA."""
+    assert cuda_error_hint(error) is None
+
+
+def test_windows_loader_error_suggests_extra():
+    """OSError загрузчика DLL распознаётся без обёртки RuntimeError."""
+    error = OSError("[WinError 126] Could not find module 'cublas64_12.dll'")
+    assert "uv sync --extra cuda" in cuda_error_hint(error)
 
 
 def _make_result(

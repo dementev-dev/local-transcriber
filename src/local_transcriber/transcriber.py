@@ -190,9 +190,50 @@ def ensure_model_available(
 
 
 def _is_cuda_error(exc: BaseException) -> bool:
-    """Проверка CUDA ошибок — используется в cli.py для Windows-диагностики."""
+    """Проверяет, относится ли ошибка к CUDA-бэкенду."""
     msg = str(exc).lower()
     return any(k in msg for k in ("cuda", "cublas", "cudnn", "out of memory"))
+
+
+def cuda_error_hint(exc: BaseException) -> str | None:
+    """Подсказывает действие только для распознанной причины CUDA-ошибки."""
+    msg = str(exc).lower()
+    if any(k in msg for k in (
+        "no kernel image", "invalid device function", "unsupported gpu",
+        "cublas_status_arch_mismatch", "cuda_error_no_binary_for_gpu",
+    )):
+        return (
+            "GPU несовместим с выбранным CUDA runtime. Установка extra не исправит "
+            "аппаратную несовместимость. Используйте --device onnx или --device cpu."
+        )
+    if any(k in msg for k in (
+        "driver version is insufficient", "no cuda-capable device",
+        "cuda error: no device", "cuda_error_no_device", "libcuda.so", "nvcuda.dll",
+    )):
+        return (
+            "CUDA не видит совместимого GPU/драйвера. Проверьте драйвер NVIDIA "
+            "и совместимость устройства с runtime. Extra не устанавливает драйвер."
+        )
+    if any(k in msg for k in ("cublas", "cudnn", "cudart")) and any(
+        k in msg for k in (
+            "not found", "cannot be loaded", "could not load", "could not find",
+            "cannot open shared object", "no such file", "winerror 126",
+        )
+    ):
+        return (
+            "Не найдены CUDA-библиотеки или их зависимости. Подключите extra cuda "
+            "в окружении приложения:\n"
+            "  Из клона: uv tool install --force '.[cuda]'\n"
+            "  Для разработки: uv sync --extra cuda\n"
+            "При установке из Git используйте инструкцию CUDA в README. "
+            "На Windows также нужен Visual C++ Runtime x64."
+        )
+    if "out of memory" in msg and any(k in msg for k in ("cuda", "cublas", "cudnn")):
+        return (
+            "Недостаточно памяти для выбранного CUDA-пути. Выберите меньшую модель "
+            "или явно используйте --device onnx / --device cpu."
+        )
+    return None
 
 
 def _is_backend_error(exc: BaseException, device: str) -> bool:

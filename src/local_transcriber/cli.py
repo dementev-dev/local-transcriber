@@ -41,8 +41,8 @@ from .speaker_diarizer import SpeakerDiarizer, load_speaker_diarizer
 from .transcriber import (
     Segment,
     TranscribeResult,
-    _is_cuda_error,
     _transcribe_file,
+    cuda_error_hint,
     load_model,
 )
 from .types import (
@@ -63,6 +63,13 @@ from .utils import (
 
 app = typer.Typer()
 console = Console(stderr=True)
+
+
+def _print_cuda_hint(exc: BaseException) -> None:
+    """Показывает подсказку, не заменяя исходную ошибку."""
+    hint = cuda_error_hint(exc)
+    if hint:
+        console.print(hint, style="yellow", markup=False)
 
 
 def _show_cli_warning(
@@ -398,21 +405,15 @@ def main(
     except SystemExit:
         raise
     except ValueError as exc:
+        _print_cuda_hint(exc)
         console.print(f"Ошибка: {exc}", style="red bold")
         raise SystemExit(1)
     except (FileNotFoundError,) as exc:
+        _print_cuda_hint(exc)
         console.print(f"Ошибка: {exc}", style="red bold")
         raise SystemExit(1)
     except Exception as exc:
-        if _is_cuda_error(exc) and sys.platform == "win32":
-            console.print(
-                "GPU на Windows требует CUDA toolkit (включает cuBLAS).\n"
-                "Установите одним из способов:\n"
-                "  choco install cuda\n"
-                "  winget install -e --id Nvidia.CUDA\n"
-                "После установки перезапустите терминал.",
-                style="yellow",
-            )
+        _print_cuda_hint(exc)
         if verbose:
             console.print_exception()
         else:
@@ -758,6 +759,7 @@ def _run_batch(
         except KeyboardInterrupt:
             raise
         except Exception as exc:
+            _print_cuda_hint(exc)
             if verbose:
                 console.print_exception()
             else:
