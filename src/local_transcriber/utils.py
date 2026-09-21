@@ -4,6 +4,7 @@ import glob
 import platform
 import subprocess
 import warnings
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 SUPPORTED_EXTENSIONS = {
@@ -141,3 +142,11 @@ def expand_globs(paths: list[Path]) -> list[Path]:
 def has_existing_transcript(input_path: Path) -> bool:
     """Проверяет наличие транскрипта для skip-логики батч-режима."""
     return build_output_path(input_path).exists()
+
+
+def package_version(name: str) -> str:
+    """Версия установленного пакета для диагностики; отсутствие не считается ошибкой."""
+    try:
+        return version(name)
+    except PackageNotFoundError:
+        return "не установлен"

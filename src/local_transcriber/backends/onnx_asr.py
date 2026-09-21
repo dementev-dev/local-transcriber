@@ -15,6 +15,7 @@ from local_transcriber.types import (
     Word,
     WordTimestampsUnavailableError,
 )
+from local_transcriber.utils import package_version
 
 
 @dataclass(frozen=True)
@@ -138,6 +139,8 @@ class OnnxAsrBackend:
         self._model_name: str | None = None
         self._model_spec: OnnxModelSpec | None = None
         self._vad: Any = None
+        self._providers: list[str] = []
+        self._quantization: str | None = None
 
     @property
     def word_timestamps_available(self) -> bool:
@@ -197,14 +200,36 @@ class OnnxAsrBackend:
         actual_compute_type = self.actual_compute_type or compute_type
         quantization = _normalize_quantization(actual_compute_type)
 
+        providers = ["CPUExecutionProvider"]
         model = onnx_asr.load_model(
             model=model_path,
             quantization=quantization,
-            providers=["CPUExecutionProvider"],
+            providers=providers,
         )
-        vad = onnx_asr.load_vad("silero", providers=["CPUExecutionProvider"])
+        vad = onnx_asr.load_vad("silero", providers=providers)
         self._vad = vad
+        self._providers = providers
+        self._quantization = quantization
         return model.with_vad(vad).with_timestamps()
+
+    def runtime_info(self) -> dict[str, str]:
+        """Версии ONNX Runtime/onnx-asr и providers, заданные сессиям ASR и VAD.
+
+        Доступность provider в wheel не означает, что граф выполняется на нём:
+        сессии получают только явно заданный список.
+        """
+        import onnxruntime
+
+        configured = ", ".join(self._providers)
+        return {
+            "engine": "onnx-asr",
+            "onnxruntime": package_version("onnxruntime"),
+            "onnx_asr": package_version("onnx-asr"),
+            "available_providers": ", ".join(onnxruntime.get_available_providers()),
+            "asr_providers": configured,
+            "vad_providers": configured,
+            "quantization": self._quantization or "float32",
+        }
 
     def transcribe(
         self,

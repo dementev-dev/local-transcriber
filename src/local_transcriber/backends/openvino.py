@@ -19,6 +19,7 @@ from local_transcriber.types import (
     Word,
     WordTimestampsUnavailableError,
 )
+from local_transcriber.utils import package_version
 
 # (model_alias, compute_type) → HF repo
 MODEL_REPOS: dict[tuple[str, str], str] = {
@@ -202,6 +203,18 @@ class OpenVINOBackend:
             device_used="",  # оркестратор проставит
             words=words,
         )
+
+    def runtime_info(self) -> dict[str, str]:
+        """Версия OpenVINO, доступные устройства и выбранное фактически."""
+        from openvino import Core
+
+        return {
+            "engine": "openvino",
+            "openvino": package_version("openvino"),
+            "available_devices": ", ".join(Core().available_devices),
+            "device": self.actual_ov_device or "",
+            "compute_type": self.actual_compute_type or "",
+        }
 
     def _resolve_repo(self, model_name: str, compute_type: str) -> tuple[str, str]:
         """Находит HF repo для пары (model, compute_type) с fallback.

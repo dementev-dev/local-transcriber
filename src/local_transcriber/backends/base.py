@@ -53,3 +53,7 @@ class Backend(Protocol):
     ) -> TranscribeResult:
         """Транскрибирует файл, возвращает результат."""
         ...
+
+    def runtime_info(self) -> dict[str, str]:
+        """Версии runtime и фактическая конфигурация для удалённой диагностики."""
+        ...

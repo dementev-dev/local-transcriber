@@ -4,7 +4,9 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from local_transcriber.transcriber import (
+    ExecutionRequest,
     Segment,
+    Transcriber,
     TranscribeResult,
     _transcribe_file,
     cuda_error_hint,
@@ -697,3 +699,265 @@ def test_ensure_model_available_openvino_default_compute_type():
     repo, ct = backend._resolve_repo("medium", "int8")
     assert repo == "OpenVINO/whisper-medium-int8-ov"
     assert ct == "int8"
+
+
+# === Transcriber: module выполнения ===
+
+
+def _make_run_backend(**kwargs):
+    """Fake adapter для external interface: runtime_info возвращает словарь."""
+    backend = _make_backend(**kwargs)
+    backend.runtime_info.return_value = {}
+    backend.word_timestamps_available = True
+    backend.actual_compute_type = None
+    backend.actual_ov_device = None
+    return backend
+
+
+@patch("local_transcriber.transcriber.get_backend")
+def test_run_loads_model_once_for_two_files(mock_get_backend):
+    """Два файла переиспользуют одну загрузку модели."""
+    backend = _make_run_backend()
+    mock_get_backend.return_value = backend
+
+    run = Transcriber(ExecutionRequest(device="cpu", model="tiny", compute_type="int8"))
+    first = run.transcribe(Path("a.mp3"))
+    second = run.transcribe(Path("b.mp3"))
+
+    assert backend.create_model.call_count == 1
+    assert backend.transcribe.call_count == 2
+    assert first.device_used == "cpu"
+    assert second.device_used == "cpu"
+
+
+@patch("local_transcriber.transcriber.get_backend")
+def test_run_does_not_load_model_before_first_file(mock_get_backend):
+    """Создание module без файлов не загружает модель."""
+    mock_get_backend.return_value = _make_run_backend()
+
+    Transcriber(ExecutionRequest(device="cpu", model="tiny", compute_type="int8"))
+
+    mock_get_backend.assert_not_called()
+
+
+@patch("local_transcriber.transcriber.get_backend")
+def test_auto_resolves_to_onnx_cpu_with_device_defaults(mock_get_backend):
+    """auto → ONNX CPU и его модель/квантизация по умолчанию; сведения различают запрошенное и выбранное."""
+    backend = _make_run_backend()
+    mock_get_backend.return_value = backend
+
+    info = Transcriber(ExecutionRequest()).prepare()
+
+    mock_get_backend.assert_called_once_with("onnx", compute_type_explicit=False)
+    backend.ensure_model_available.assert_called_once_with(
+        "gigaam-v3-e2e-rnnt", "int8", None
+    )
+    assert info.requested_device == "auto"
+    assert info.device == "onnx"
+    assert info.engine == "onnx-asr"
+    assert info.model == "gigaam-v3-e2e-rnnt"
+    assert info.compute_type == "int8"
+    assert info.description == "ONNX (CPU)"
+
+
+@patch("local_transcriber.transcriber.get_backend")
+def test_run_falls_back_to_cpu_at_load_and_keeps_state_for_next_file(
+    mock_get_backend,
+):
+    """Не-strict CUDA-ошибка при загрузке → CPU; следующий файл идёт на CPU без перезагрузки."""
+    cuda_backend = _make_run_backend(
+        create_model_error=RuntimeError("CUDA out of memory")
+    )
+    cpu_backend = _make_run_backend()
+    mock_get_backend.side_effect = lambda device, **_: (
+        cuda_backend if device == "cuda" else cpu_backend
+    )
+
+    run = Transcriber(
+        ExecutionRequest(
+            device="cuda", model="tiny", compute_type="int8", strict_device=False
+        )
+    )
+    with pytest.warns(UserWarning, match="Переключение на CPU"):
+        first = run.transcribe(Path("a.mp3"))
+    second = run.transcribe(Path("b.mp3"))
+
+    assert first.device_used == "cpu"
+    assert second.device_used == "cpu"
+    assert cpu_backend.create_model.call_count == 1
+    assert run.execution.resolved_device == "cuda"
+    assert run.execution.device == "cpu"
+    assert run.execution.engine == "faster-whisper"
+
+
+@patch("local_transcriber.transcriber.get_backend")
+def test_run_strict_device_raises_without_fallback(mock_get_backend):
+    """Явный device (strict по умолчанию) не подменяется другим исполнением."""
+    mock_get_backend.return_value = _make_run_backend(
+        create_model_error=RuntimeError("CUDA driver version is insufficient")
+    )
+
+    with pytest.raises(RuntimeError, match="driver version"):
+        Transcriber(
+            ExecutionRequest(device="cuda", model="tiny", compute_type="int8")
+        ).prepare()
+
+    assert mock_get_backend.call_count == 1
+
+
+@patch("local_transcriber.transcriber.get_backend")
+def test_run_midstream_fallback_reloads_once_and_continues_batch(mock_get_backend):
+    """CUDA-ошибка во время распознавания → повтор файла на CPU; батч продолжается на CPU."""
+    cuda_backend = _make_run_backend(
+        transcribe_error=RuntimeError("CUBLAS_STATUS_ALLOC_FAILED")
+    )
+    cpu_backend = _make_run_backend()
+    mock_get_backend.side_effect = lambda device, **_: (
+        cuda_backend if device == "cuda" else cpu_backend
+    )
+
+    run = Transcriber(
+        ExecutionRequest(
+            device="cuda", model="tiny", compute_type="int8", strict_device=False
+        )
+    )
+    with pytest.warns(UserWarning, match="Переключение на CPU и повтор"):
+        first = run.transcribe(Path("a.mp3"))
+    second = run.transcribe(Path("b.mp3"))
+
+    assert first.device_used == "cpu"
+    assert second.device_used == "cpu"
+    assert cpu_backend.create_model.call_count == 1
+    assert cpu_backend.transcribe.call_count == 2
+    assert run.execution.device == "cpu"
+
+
+@patch("local_transcriber.transcriber.get_backend")
+def test_run_ordinary_file_error_does_not_change_state(mock_get_backend):
+    """Ошибка файла (не движка) пробрасывается, модель и исполнение остаются прежними."""
+    backend = _make_run_backend()
+    backend.transcribe.side_effect = [
+        ValueError("Не удалось декодировать"),
+        _make_result(),
+    ]
+    mock_get_backend.return_value = backend
+
+    run = Transcriber(
+        ExecutionRequest(device="cuda", model="tiny", compute_type="int8")
+    )
+    with pytest.raises(ValueError, match="декодировать"):
+        run.transcribe(Path("bad.mp3"))
+    result = run.transcribe(Path("good.mp3"))
+
+    assert result.device_used == "cuda"
+    assert backend.create_model.call_count == 1
+    assert mock_get_backend.call_count == 1
+
+
+@patch("local_transcriber.transcriber.get_backend")
+def test_run_word_timestamps_error_is_not_a_fallback_reason(mock_get_backend):
+    """Нарушение пословного контракта не считается ошибкой движка."""
+    mock_get_backend.return_value = _make_run_backend(
+        transcribe_error=WordTimestampsUnavailableError("нет слов")
+    )
+
+    run = Transcriber(
+        ExecutionRequest(
+            device="cuda", model="tiny", compute_type="int8", strict_device=False
+        )
+    )
+    with pytest.raises(WordTimestampsUnavailableError):
+        run.transcribe(Path("a.mp3"))
+
+    assert mock_get_backend.call_count == 1
+
+
+@patch("local_transcriber.transcriber.get_backend")
+def test_run_requires_word_timestamps_before_first_file(mock_get_backend):
+    """Требование пословного контракта проверяется при подготовке, ASR не запускается."""
+    backend = _make_run_backend()
+    backend.word_timestamps_available = False
+    mock_get_backend.return_value = backend
+
+    run = Transcriber(
+        ExecutionRequest(
+            device="onnx", model="some/raw-model", require_word_timestamps=True
+        )
+    )
+    with pytest.raises(ValueError, match="пословные таймкоды"):
+        run.transcribe(Path("a.mp3"))
+
+    backend.transcribe.assert_not_called()
+
+
+@patch("local_transcriber.transcriber.get_backend")
+def test_run_reports_actual_openvino_device(mock_get_backend):
+    """openvino-gpu, выбранный до загрузки, уточняется по фактическому устройству OpenVINO."""
+    backend = _make_run_backend()
+    backend.actual_ov_device = "CPU"
+    backend.actual_compute_type = "int8"
+    mock_get_backend.return_value = backend
+
+    with patch(
+        "local_transcriber.transcriber.detect_device", return_value="openvino-gpu"
+    ):
+        info = Transcriber(
+            ExecutionRequest(device="openvino", model="medium")
+        ).prepare()
+
+    assert info.requested_device == "openvino"
+    assert info.resolved_device == "openvino-gpu"
+    assert info.device == "openvino-cpu"
+    assert info.engine == "openvino"
+    assert info.compute_type == "int8"
+    assert info.description == "OpenVINO (CPU)"
+
+
+@patch("local_transcriber.transcriber.get_gpu_name", return_value="RTX 3060")
+@patch("local_transcriber.transcriber.get_backend")
+def test_run_exposes_runtime_and_gpu_name_from_module_data(mock_get_backend, _gpu):
+    """Сведения о runtime берутся из adapter'а, имя GPU — из драйвера, потоки — из запроса."""
+    backend = _make_run_backend()
+    backend.runtime_info.return_value = {"ctranslate2": "4.5.0"}
+    mock_get_backend.return_value = backend
+
+    info = Transcriber(
+        ExecutionRequest(
+            device="cuda", model="tiny", compute_type="float16", cpu_threads=4
+        )
+    ).prepare()
+
+    assert info.description == "CUDA (RTX 3060)"
+    assert info.runtime == {"ctranslate2": "4.5.0"}
+    assert info.cpu_threads == 4
+    backend.create_model.assert_called_once_with(
+        "/mock/model", "cuda", "float16", cpu_threads=4
+    )
+
+
+@patch("local_transcriber.transcriber.get_backend")
+def test_run_passes_auto_language_as_none(mock_get_backend):
+    backend = _make_run_backend()
+    mock_get_backend.return_value = backend
+
+    Transcriber(
+        ExecutionRequest(device="cpu", model="tiny", language="auto")
+    ).transcribe(Path("a.mp3"))
+
+    assert backend.transcribe.call_args[0][2] is None
+
+
+@patch("local_transcriber.transcriber.get_backend")
+def test_public_transcribe_uses_the_same_execution_module(mock_get_backend):
+    """transcribe() без параметров идёт тем же путём, что CLI по умолчанию: ONNX CPU."""
+    backend = _make_run_backend(transcribe_result=_make_result(count=1))
+    mock_get_backend.return_value = backend
+
+    result = transcribe(Path("a.mp3"))
+
+    mock_get_backend.assert_called_once_with("onnx", compute_type_explicit=False)
+    backend.ensure_model_available.assert_called_once_with(
+        "gigaam-v3-e2e-rnnt", "int8", None
+    )
+    assert result.device_used == "onnx"
+    assert len(result.segments) == 1

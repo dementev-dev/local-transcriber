@@ -659,3 +659,27 @@ class TestModelAliases:
         assert "--device cpu --model medium" in message
         assert "--device cuda --model large-v3-turbo" not in message
         assert "--device cpu --model large-v3-turbo" not in message
+
+
+class TestRuntimeInfo:
+    def test_reports_versions_and_configured_providers(self, monkeypatch):
+        """Диагностика различает доступные providers и те, что заданы сессиям ASR и VAD."""
+        monkeypatch.setattr(
+            "onnxruntime.get_available_providers",
+            lambda: ["CoreMLExecutionProvider", "CPUExecutionProvider"],
+        )
+        monkeypatch.setattr("onnx_asr.load_model", lambda **kwargs: MagicMock())
+        monkeypatch.setattr("onnx_asr.load_vad", lambda model, **kwargs: MagicMock())
+        backend = OnnxAsrBackend()
+        backend.actual_compute_type = "int8"
+        backend.create_model("gigaam-v3-e2e-rnnt", "onnx", "int8")
+
+        info = backend.runtime_info()
+
+        assert info["engine"] == "onnx-asr"
+        assert info["onnxruntime"]
+        assert info["onnx_asr"]
+        assert info["available_providers"] == "CoreMLExecutionProvider, CPUExecutionProvider"
+        assert info["asr_providers"] == "CPUExecutionProvider"
+        assert info["vad_providers"] == "CPUExecutionProvider"
+        assert info["quantization"] == "int8"
