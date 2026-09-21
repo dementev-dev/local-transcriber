@@ -53,10 +53,11 @@ create_model в одном месте и держит модель, adapter и �
 
 Внутри module различаются три вещи: поддерживаемая модель, движок
 распознавания (`faster-whisper`, `openvino`, `onnx-asr`) и способ исполнения.
-Значение `device` из CLI/TOML сохраняется как вход: таблица `_ENGINES`
-сопоставляет ему движок, а аппаратную часть (CPU, CUDA, Intel GPU, список
-providers) трактует adapter. Новое исполнение — строка таблицы и его
-понимание в adapter'е, не новая иерархия adapters.
+Значение `device` из CLI/TOML сохраняется как вход: `get_backend` выбирает
+по нему adapter, adapter называет свой движок атрибутом `engine`, а
+аппаратную часть (CPU, CUDA, Intel GPU, список providers) трактует сам.
+Новое исполнение — новое значение `device` в `get_backend` и его понимание
+в adapter'е, не новая иерархия adapters.
 
 ### Cross-backend fallback
 
