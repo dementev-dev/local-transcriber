@@ -131,7 +131,7 @@ class Transcriber:
     ) -> TranscribeResult:
         """Транскрибирует один файл; при разрешённом fallback перезагружает модель."""
         self.prepare(on_status)
-        lang_arg = self._request.language
+        lang_arg = self._request.language or None
         if lang_arg == "auto":
             lang_arg = None
         try:
