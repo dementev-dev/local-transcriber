@@ -45,6 +45,7 @@ def _make_backend(
 ):
     """Fake adapter на internal seam Backend; module выполнения работает по-настоящему."""
     backend = MagicMock(name="Backend")
+    backend.engine = "onnx-asr"
     backend.word_timestamps_available = word_timestamps
     backend.actual_compute_type = None
     backend.actual_ov_device = actual_ov_device
@@ -126,7 +127,7 @@ def test_cli_verbose_prints_runtime_diagnostics(tmp_path):
         out = runner.invoke(app, [str(audio), "--verbose", "--threads", "4"])
 
     assert out.exit_code == 0
-    assert "Движок: onnx-asr  Потоки: 4" in out.output
+    assert "Движок: onnx-asr  Потоки (запрошено): 4" in out.output
     assert "onnxruntime: 1.28.0" in out.output
     assert "asr_providers: CPUExecutionProvider" in out.output
 
@@ -1069,7 +1070,7 @@ def test_cli_reports_openvino_cpu_when_gpu_was_requested(tmp_path):
     assert "Запрошено openvino, используется openvino-cpu" in out.output
 
 
-def test_cli_threads_passed_to_load_model(tmp_path):
+def test_cli_threads_reach_adapter(tmp_path):
     """--threads передаётся в create_model как cpu_threads."""
     audio = tmp_path / "test.mp3"
     audio.write_bytes(b"fake")
@@ -1325,3 +1326,33 @@ def test_cli_default_result_has_no_quality_warnings(tmp_path):
     assert out.exit_code == 0
     assert "потеря хвоста" not in out.output
     assert "галлюцинации" not in out.output
+
+
+def test_cli_toml_compute_type_overrides_device_default(tmp_path):
+    """compute_type из TOML важнее умолчания устройства и считается явным."""
+    audio = tmp_path / "test.mp3"
+    audio.write_bytes(b"fake")
+
+    with (
+        _cli_run(tmp_file=audio, config={"device": "cuda", "compute_type": "int8"}) as (
+            backend,
+            _write,
+        ),
+        patch("local_transcriber.transcriber.get_backend", return_value=backend) as get_backend,
+    ):
+        out = runner.invoke(app, [str(audio)])
+
+    assert out.exit_code == 0
+    get_backend.assert_called_once_with("cuda", compute_type_explicit=True)
+    backend.ensure_model_available.assert_called_once_with("medium", "int8", ANY)
+
+
+def test_cli_device_default_compute_type_when_not_configured(tmp_path):
+    audio = tmp_path / "test.mp3"
+    audio.write_bytes(b"fake")
+
+    with _cli_run(tmp_file=audio, config={"device": "cuda"}) as (backend, _write):
+        out = runner.invoke(app, [str(audio)])
+
+    assert out.exit_code == 0
+    backend.ensure_model_available.assert_called_once_with("medium", "float16", ANY)

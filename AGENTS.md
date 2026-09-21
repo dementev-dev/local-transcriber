@@ -25,7 +25,7 @@ Package manager is **uv** (not pip). Build backend is hatchling.
 
 ```
 CLI (cli.py)
-  → config.py      cascade: CLI arg → .transcriber.toml → device-aware default → hardcoded
+  → config.py      cascade: CLI arg → .transcriber.toml (model/compute_type stay None for the module to resolve)
   → utils.py       detect_device(), validate files, expand globs (Windows workaround)
   → context_menu.py Windows SendTo: Transcribe.cmd install/uninstall (--install-menu / --uninstall-menu)
   → transcriber.py Transcriber(ExecutionRequest): resolves auto + device defaults,

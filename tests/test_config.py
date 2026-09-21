@@ -106,15 +106,15 @@ def test_resolve_defaults_config_wins():
     assert result["model"] == "tiny"
 
 
-def test_resolve_defaults_hardcoded_fallback():
+def test_resolve_defaults_leaves_device_aware_keys_empty():
     result = resolve_defaults(
         {"model": None, "language": None, "device": None, "compute_type": None}, {}
     )
     assert result == {
-        "model": "medium",
+        "model": None,
         "language": "ru",
         "device": "auto",
-        "compute_type": "float32",
+        "compute_type": None,
         "diarize": False,
     }
 

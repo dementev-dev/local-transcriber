@@ -97,3 +97,4 @@ def test_runtime_info_reports_versions_and_cuda_devices(monkeypatch):
     assert info["faster_whisper"]
     assert info["cuda_devices"] == "0"
     assert info["compute_type"] == "float32"
+    assert info["cpu_threads"] == "по умолчанию"

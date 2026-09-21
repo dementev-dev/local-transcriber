@@ -343,13 +343,11 @@ def main(
         diarize_enabled = defaults["diarize"] is True or speakers is not None
         requested_device = defaults["device"]
 
-        # Явные model/compute_type; умолчания исполнения разрешает module.
+        # Умолчания model/compute_type зависят от устройства — их разрешает module.
         request = ExecutionRequest(
             device=requested_device,
-            model=model if model is not None else config.get("model"),
-            compute_type=(
-                compute_type if compute_type is not None else config.get("compute_type")
-            ),
+            model=defaults["model"],
+            compute_type=defaults["compute_type"],
             language=defaults["language"],
             cpu_threads=threads,
             require_word_timestamps=diarize_enabled,
@@ -427,7 +425,9 @@ def _print_execution_header(info: ExecutionInfo, verbose: bool) -> None:
         )
     if verbose:
         threads = info.cpu_threads or "по умолчанию библиотеки"
-        console.print(f"Движок: {info.engine}  Потоки: {threads}", style="dim")
+        console.print(
+            f"Движок: {info.engine}  Потоки (запрошено): {threads}", style="dim"
+        )
         for key, value in info.runtime.items():
             console.print(f"  {key}: {value}", style="dim", markup=False)
 
@@ -502,13 +502,6 @@ def _run_single(
         if diarization_warning is not None:
             console.print(f"Внимание: {diarization_warning}", style="yellow")
 
-    execution = transcriber.execution
-    if execution.device != info.device:
-        console.print(
-            f"Запрошено {execution.requested_device}, использовано {execution.device}",
-            style="yellow",
-        )
-
     if len(result.segments) == 0:
         message = f"Речь не обнаружена в файле {validated_file.name}"
         if speaker_diarizer is not None:
@@ -520,8 +513,8 @@ def _run_single(
     content = format_transcript(
         result=result,
         source_filename=validated_file.name,
-        model_name=execution.model,
-        device_info=execution.description,
+        model_name=info.model,
+        device_info=info.description,
         language_mode=language_mode,
         speaker_transcript=speaker_transcript,
         diarization_warning=diarization_warning,
@@ -591,7 +584,6 @@ def _run_batch(
             def on_segment(seg: Segment) -> None:
                 console.print(f"  [{seg.start:.2f}s] {seg.text.strip()}")
 
-            device_before = transcriber.execution.device
             with Status(f"{prefix}...", console=console) as status:
                 result = transcriber.transcribe(
                     file,
@@ -599,13 +591,6 @@ def _run_batch(
                     on_status=status.update
                     if not verbose
                     else lambda msg: console.print(msg),
-                )
-
-            execution = transcriber.execution
-            if execution.device != device_before:
-                console.print(
-                    f"  {file.name}: fallback на {execution.device} при транскрипции",
-                    style="yellow",
                 )
 
             language_mode = _format_language_mode(request.language or "auto", result)
@@ -651,8 +636,8 @@ def _run_batch(
             content = format_transcript(
                 result=result,
                 source_filename=file.name,
-                model_name=execution.model,
-                device_info=execution.description,
+                model_name=info.model,
+                device_info=info.description,
                 language_mode=language_mode,
                 speaker_transcript=speaker_transcript,
                 diarization_warning=diarization_warning,

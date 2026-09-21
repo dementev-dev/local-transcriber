@@ -57,6 +57,7 @@ MODEL_REQUIRED_FILES = [
 class OpenVINOBackend:
     """Бэкенд транскрипции через openvino-genai WhisperPipeline."""
 
+    engine = "openvino"
     word_timestamps_available = True
 
     def __init__(
@@ -213,6 +214,7 @@ class OpenVINOBackend:
             "available_devices": ", ".join(Core().available_devices),
             "device": self.actual_ov_device or "",
             "compute_type": self.actual_compute_type or "",
+            "threads": "управляет OpenVINO, --threads не применяется",
         }
 
     def _resolve_repo(self, model_name: str, compute_type: str) -> tuple[str, str]:

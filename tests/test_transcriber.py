@@ -232,7 +232,7 @@ def test_transcribe_reports_status_transitions(mock_get_backend):
         on_status=statuses.append,
     )
 
-    # load_model reports init status, _transcribe_file reports transcribe status
+    # Статусы подготовки и распознавания идут через один callback
     assert any("Инициализирую модель" in s for s in statuses)
     assert any("Транскрибирую" in s for s in statuses)
 
@@ -415,6 +415,7 @@ def _make_run_backend(**kwargs):
     """Fake adapter для external interface: runtime_info возвращает словарь."""
     backend = _make_backend(**kwargs)
     backend.runtime_info.return_value = {}
+    backend.engine = "fake-engine"
     backend.word_timestamps_available = True
     backend.actual_compute_type = None
     backend.actual_ov_device = None
@@ -461,7 +462,6 @@ def test_auto_resolves_to_onnx_cpu_with_device_defaults(mock_get_backend):
     )
     assert info.requested_device == "auto"
     assert info.device == "onnx"
-    assert info.engine == "onnx-asr"
     assert info.model == "gigaam-v3-e2e-rnnt"
     assert info.compute_type == "int8"
     assert info.description == "ONNX (CPU)"
@@ -499,7 +499,6 @@ def test_run_falls_back_to_cpu_at_load_and_keeps_state_for_next_file(
     assert cpu_backend.create_model.call_args.kwargs["cpu_threads"] == 3
     assert run.execution.resolved_device == "cuda"
     assert run.execution.device == "cpu"
-    assert run.execution.engine == "faster-whisper"
 
 
 @patch("local_transcriber.transcriber.get_backend")
@@ -555,7 +554,9 @@ def test_run_ordinary_file_error_does_not_change_state(mock_get_backend):
     mock_get_backend.return_value = backend
 
     run = Transcriber(
-        ExecutionRequest(device="cuda", model="tiny", compute_type="int8")
+        ExecutionRequest(
+            device="cuda", model="tiny", compute_type="int8", strict_device=False
+        )
     )
     with pytest.raises(ValueError, match="декодировать"):
         run.transcribe(Path("bad.mp3"))
@@ -620,7 +621,6 @@ def test_run_reports_actual_openvino_device(mock_get_backend):
     assert info.requested_device == "openvino"
     assert info.resolved_device == "openvino-gpu"
     assert info.device == "openvino-cpu"
-    assert info.engine == "openvino"
     assert info.compute_type == "int8"
     assert info.description == "OpenVINO (CPU)"
 
@@ -723,7 +723,6 @@ def test_run_openvino_runtime_error_falls_back_when_not_strict(mock_get_backend)
         result = run.transcribe(Path("a.mp3"))
 
     assert result.device_used == "cpu"
-    assert run.execution.engine == "faster-whisper"
 
 
 @patch("local_transcriber.transcriber.get_backend")
@@ -749,3 +748,113 @@ def test_run_reports_openvino_gpu_chosen_for_cpu_request(mock_get_backend):
 
     assert info.resolved_device == "openvino-cpu"
     assert info.device == "openvino-gpu"
+
+
+@patch("local_transcriber.transcriber.get_backend")
+def test_run_fallback_rederives_implicit_compute_type_for_cpu(mock_get_backend):
+    """Неявный compute_type следует за фактическим устройством: CPU не получает float16."""
+    cuda_backend = _make_run_backend(create_model_error=RuntimeError("CUDA error"))
+    cpu_backend = _make_run_backend()
+    mock_get_backend.side_effect = lambda device, **_: (
+        cuda_backend if device == "cuda" else cpu_backend
+    )
+
+    run = Transcriber(ExecutionRequest(device="cuda", strict_device=False))
+    with pytest.warns(UserWarning, match="Переключение на CPU"):
+        info = run.prepare()
+
+    cuda_backend.ensure_model_available.assert_called_once_with("medium", "float16", None)
+    cpu_backend.ensure_model_available.assert_called_once_with("medium", "float32", None)
+    assert info.compute_type == "float32"
+
+
+@patch("local_transcriber.transcriber.get_backend")
+def test_run_fallback_keeps_explicit_compute_type(mock_get_backend):
+    cuda_backend = _make_run_backend(create_model_error=RuntimeError("CUDA error"))
+    cpu_backend = _make_run_backend()
+    mock_get_backend.side_effect = lambda device, **_: (
+        cuda_backend if device == "cuda" else cpu_backend
+    )
+
+    run = Transcriber(
+        ExecutionRequest(device="cuda", compute_type="int8", strict_device=False)
+    )
+    with pytest.warns(UserWarning):
+        run.prepare()
+
+    cpu_backend.ensure_model_available.assert_called_once_with("medium", "int8", None)
+
+
+@patch("local_transcriber.transcriber.get_backend")
+def test_run_failed_capability_check_does_not_mark_module_prepared(mock_get_backend):
+    """После отказа по пословному контракту повторный вызов не запускает ASR."""
+    backend = _make_run_backend()
+    backend.word_timestamps_available = False
+    mock_get_backend.return_value = backend
+
+    run = Transcriber(
+        ExecutionRequest(device="onnx", model="some/raw-model", require_word_timestamps=True)
+    )
+    with pytest.raises(ValueError, match="пословные таймкоды"):
+        run.prepare()
+    with pytest.raises(ValueError, match="пословные таймкоды"):
+        run.transcribe(Path("a.mp3"))
+
+    backend.transcribe.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("device", "model", "compute_type"),
+    [
+        ("cpu", "medium", "float32"),
+        ("cuda", "medium", "float16"),
+        ("openvino-cpu", "medium", "int8"),
+        ("openvino-gpu", "medium", "int8"),
+        ("onnx", "gigaam-v3-e2e-rnnt", "int8"),
+    ],
+)
+@patch("local_transcriber.transcriber.get_backend")
+def test_run_applies_device_defaults_when_request_leaves_them_empty(
+    mock_get_backend, device, model, compute_type
+):
+    backend = _make_run_backend()
+    mock_get_backend.return_value = backend
+
+    Transcriber(ExecutionRequest(device=device)).prepare()
+
+    mock_get_backend.assert_called_once_with(device, compute_type_explicit=False)
+    backend.ensure_model_available.assert_called_once_with(model, compute_type, None)
+
+
+@patch("local_transcriber.transcriber.get_backend")
+def test_run_explicit_values_override_device_defaults(mock_get_backend):
+    backend = _make_run_backend()
+    mock_get_backend.return_value = backend
+
+    Transcriber(ExecutionRequest(device="cuda", model="large-v3", compute_type="int8")).prepare()
+
+    mock_get_backend.assert_called_once_with("cuda", compute_type_explicit=True)
+    backend.ensure_model_available.assert_called_once_with("large-v3", "int8", None)
+
+
+@patch("local_transcriber.transcriber.get_backend")
+def test_run_engine_comes_from_adapter(mock_get_backend):
+    backend = _make_run_backend()
+    backend.engine = "openvino"
+    mock_get_backend.return_value = backend
+
+    info = Transcriber(ExecutionRequest(device="openvino-cpu", model="medium")).prepare()
+
+    assert info.engine == "openvino"
+
+
+@patch("local_transcriber.transcriber.get_backend")
+def test_run_diagnostics_failure_does_not_fail_the_run(mock_get_backend):
+    """Сбой сбора runtime_info не роняет распознавание, а попадает в сведения."""
+    backend = _make_run_backend()
+    backend.runtime_info.side_effect = RuntimeError("plugin enumeration failed")
+    mock_get_backend.return_value = backend
+
+    info = Transcriber(ExecutionRequest(device="cpu", model="tiny")).prepare()
+
+    assert "plugin enumeration failed" in info.runtime["diagnostics"]

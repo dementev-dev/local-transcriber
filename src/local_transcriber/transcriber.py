@@ -10,23 +10,12 @@ from local_transcriber.backends import get_backend
 from local_transcriber.config import DEVICE_DEFAULTS, HARDCODED_DEFAULTS
 
 # Re-export из types.py для обратной совместимости
-from local_transcriber.types import (  # noqa: F401
+from local_transcriber.types import (
     Segment,
     TranscribeResult,
     WordTimestampsUnavailableError,
 )
 from local_transcriber.utils import detect_device, get_gpu_name, get_intel_gpu_name
-
-# Движок распознавания для каждого значения device; остальное, как и в
-# get_backend, уходит в faster-whisper. Способ исполнения (CPU/GPU) остаётся
-# в самом значении device и трактуется adapter'ом.
-_ENGINES: dict[str, str] = {
-    "cpu": "faster-whisper",
-    "cuda": "faster-whisper",
-    "openvino-cpu": "openvino",
-    "openvino-gpu": "openvino",
-    "onnx": "onnx-asr",
-}
 
 
 @dataclass(frozen=True)
@@ -78,23 +67,15 @@ class Transcriber:
             else request.device != "auto"
         )
         self._compute_type_explicit = request.compute_type is not None
-        resolved = detect_device(request.device)
-        defaults = DEVICE_DEFAULTS.get(resolved, {})
-        self._model_name = request.model or defaults.get(
-            "model", HARDCODED_DEFAULTS["model"]
-        )
-        self._compute_type = request.compute_type or defaults.get(
-            "compute_type", HARDCODED_DEFAULTS["compute_type"]
-        )
-        self._resolved_device = resolved
-        self._device = resolved
+        self._resolved_device = detect_device(request.device)
+        self._device = self._resolved_device
         self._backend: Any = None
         self._model: Any = None
         self._info: ExecutionInfo | None = None
 
     @property
     def execution(self) -> ExecutionInfo:
-        """Текущие сведения о выполнении; до prepare() — без загрузки."""
+        """Текущие сведения о выполнении; доступны после prepare()."""
         if self._info is None:
             raise RuntimeError("Модель ещё не подготовлена: вызовите prepare()")
         return self._info
@@ -104,7 +85,7 @@ class Transcriber:
         if self._info is not None:
             return self._info
         try:
-            self._load(self._device, on_status)
+            info = self._load(self._device, on_status)
         except (RuntimeError, ValueError) as exc:
             if not self._may_fall_back(exc):
                 raise
@@ -113,15 +94,13 @@ class Transcriber:
                 "Переключение на CPU.",
                 stacklevel=2,
             )
-            self._load("cpu", on_status)
-        if (
-            self._request.require_word_timestamps
-            and not self._info.word_timestamps_available
-        ):
+            info = self._load("cpu", on_status)
+        if self._request.require_word_timestamps and not info.word_timestamps_available:
             raise ValueError(
                 "Выбранный движок или модель не поддерживает пословные таймкоды"
             )
-        return self._info
+        self._info = info
+        return info
 
     def transcribe(
         self,
@@ -144,7 +123,7 @@ class Transcriber:
                 "Переключение на CPU и повтор.",
                 stacklevel=2,
             )
-            self._load("cpu", on_status)
+            self._info = self._load("cpu", on_status)
             result = self._recognize(file_path, lang_arg, on_segment, on_status)
         return result
 
@@ -168,40 +147,49 @@ class Transcriber:
             return False
         return _is_backend_error(exc, self._device)
 
-    def _load(self, device: str, on_status: Callable[[str], None] | None) -> None:
-        backend = get_backend(device, compute_type_explicit=self._compute_type_explicit)
-        model_path = backend.ensure_model_available(
-            self._model_name, self._compute_type, on_status
+    def _load(
+        self, device: str, on_status: Callable[[str], None] | None
+    ) -> ExecutionInfo:
+        """Загружает модель на device; неявные model/compute_type берутся из его умолчаний."""
+        defaults = DEVICE_DEFAULTS.get(device, {})
+        model_name = self._request.model or defaults.get(
+            "model", HARDCODED_DEFAULTS["model"]
         )
+        compute_type = self._request.compute_type or defaults.get(
+            "compute_type", HARDCODED_DEFAULTS["compute_type"]
+        )
+        backend = get_backend(device, compute_type_explicit=self._compute_type_explicit)
+        model_path = backend.ensure_model_available(model_name, compute_type, on_status)
         _notify_status(on_status, f"Инициализирую модель на {device}...")
         model = backend.create_model(
             model_path,
             device,
-            self._compute_type,
+            compute_type,
             cpu_threads=self._request.cpu_threads,
         )
         self._backend = backend
         self._model = model
         self._device = _refine_openvino_device(device, backend)
-        self._info = self._describe()
-
-    def _describe(self) -> ExecutionInfo:
-        backend = self._backend
-        compute_type = (
-            getattr(backend, "actual_compute_type", None) or self._compute_type
-        )
         return ExecutionInfo(
             requested_device=self._request.device,
             resolved_device=self._resolved_device,
             device=self._device,
-            engine=_ENGINES.get(self._device, "faster-whisper"),
-            model=self._model_name,
-            compute_type=compute_type,
+            engine=backend.engine,
+            model=model_name,
+            compute_type=getattr(backend, "actual_compute_type", None) or compute_type,
             cpu_threads=self._request.cpu_threads,
             word_timestamps_available=bool(backend.word_timestamps_available),
             description=_describe_device(self._device),
-            runtime=dict(backend.runtime_info()),
+            runtime=_collect_runtime_info(backend),
         )
+
+
+def _collect_runtime_info(backend: Any) -> dict[str, str]:
+    """Диагностика не должна ронять запуск: сбой попадает в сведения строкой."""
+    try:
+        return dict(backend.runtime_info())
+    except Exception as exc:  # noqa: BLE001
+        return {"diagnostics": f"недоступно ({exc})"}
 
 
 def _refine_openvino_device(device: str, backend: Any) -> str:

@@ -30,12 +30,16 @@ class CliValues(TypedDict, total=False):
 
 
 class ResolvedConfig(TypedDict):
-    """Полная конфигурация после разрешения каскада."""
+    """Конфигурация после каскада CLI > TOML.
 
-    model: str
+    ``model`` и ``compute_type`` остаются ``None``, если не заданы явно:
+    их умолчания зависят от устройства и разрешаются при загрузке модели.
+    """
+
+    model: str | None
     language: str
     device: str
-    compute_type: str
+    compute_type: str | None
     diarize: bool
 
 
@@ -47,6 +51,8 @@ HARDCODED_DEFAULTS: ResolvedConfig = {
     "diarize": False,
 }
 
+# Умолчания по устройству; HARDCODED_DEFAULTS — последний резерв для
+# устройств вне таблицы.
 DEVICE_DEFAULTS: dict[str, dict[str, str]] = {
     "cuda": {"model": "medium", "compute_type": "float16"},
     "cpu": {"model": "medium", "compute_type": "float32"},
@@ -136,11 +142,12 @@ def load_config(path: Path | None = None) -> ConfigValues:
 
 
 def resolve_defaults(cli_values: CliValues, config: ConfigValues) -> ResolvedConfig:
-    """Каскад приоритетов: CLI > конфиг-файл > hardcoded-дефолты."""
+    """Каскад приоритетов: CLI > конфиг-файл > hardcoded-дефолты.
+
+    Device-aware ключи (model, compute_type) без явного значения остаются None.
+    """
     return {
-        "model": _resolve_value(
-            cli_values.get("model"), config.get("model"), HARDCODED_DEFAULTS["model"]
-        ),
+        "model": _resolve_value(cli_values.get("model"), config.get("model"), None),
         "language": _resolve_value(
             cli_values.get("language"),
             config.get("language"),
@@ -152,9 +159,7 @@ def resolve_defaults(cli_values: CliValues, config: ConfigValues) -> ResolvedCon
             HARDCODED_DEFAULTS["device"],
         ),
         "compute_type": _resolve_value(
-            cli_values.get("compute_type"),
-            config.get("compute_type"),
-            HARDCODED_DEFAULTS["compute_type"],
+            cli_values.get("compute_type"), config.get("compute_type"), None
         ),
         "diarize": _resolve_value(
             cli_values.get("diarize"),

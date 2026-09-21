@@ -16,6 +16,9 @@ class Backend(Protocol):
     наследование не требуется.
     """
 
+    engine: str
+    """Имя движка для сведений о выполнении."""
+
     @property
     def word_timestamps_available(self) -> bool:
         """Гарантирует ли выбранный backend/model пословные таймкоды."""

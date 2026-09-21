@@ -480,3 +480,4 @@ def test_runtime_info_reports_available_and_actual_devices(monkeypatch):
     assert info["available_devices"] == "CPU, GPU"
     assert info["device"] == "GPU"
     assert info["compute_type"] == "fp16"
+    assert "--threads не применяется" in info["threads"]

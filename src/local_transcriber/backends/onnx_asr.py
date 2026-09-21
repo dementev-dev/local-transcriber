@@ -132,6 +132,8 @@ def _normalize_quantization(compute_type: str) -> str | None:
 class OnnxAsrBackend:
     """Бэкенд транскрипции через onnx-asr (ONNX Runtime)."""
 
+    engine = "onnx-asr"
+
     def __init__(self, compute_type_explicit: bool = True):
         self._compute_type_explicit = compute_type_explicit
         self.actual_compute_type: str | None = None

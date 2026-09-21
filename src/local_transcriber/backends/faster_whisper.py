@@ -44,10 +44,12 @@ MODEL_REQUIRED_FILES = [
 class FasterWhisperBackend:
     """Бэкенд транскрипции через faster-whisper (CTranslate2)."""
 
+    engine = "faster-whisper"
     word_timestamps_available = True
 
     def __init__(self):
         self.actual_compute_type: str | None = None
+        self._cpu_threads = 0
 
     def ensure_model_available(
         self,
@@ -95,6 +97,7 @@ class FasterWhisperBackend:
 
         from faster_whisper import WhisperModel
 
+        self._cpu_threads = cpu_threads
         try:
             return WhisperModel(
                 model_path,
@@ -171,6 +174,7 @@ class FasterWhisperBackend:
             "ctranslate2": package_version("ctranslate2"),
             "cuda_devices": cuda_devices,
             "compute_type": self.actual_compute_type or "",
+            "cpu_threads": str(self._cpu_threads) if self._cpu_threads else "по умолчанию",
         }
 
 
