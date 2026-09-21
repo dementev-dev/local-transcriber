@@ -209,7 +209,6 @@ class OpenVINOBackend:
         from openvino import Core
 
         return {
-            "engine": "openvino",
             "openvino": package_version("openvino"),
             "available_devices": ", ".join(Core().available_devices),
             "device": self.actual_ov_device or "",

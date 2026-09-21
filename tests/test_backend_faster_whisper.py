@@ -93,7 +93,6 @@ def test_runtime_info_reports_versions_and_cuda_devices(monkeypatch):
 
     info = backend.runtime_info()
 
-    assert info["engine"] == "faster-whisper"
     assert info["ctranslate2"]
     assert info["faster_whisper"]
     assert info["cuda_devices"] == "0"

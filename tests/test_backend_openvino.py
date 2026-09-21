@@ -476,7 +476,6 @@ def test_runtime_info_reports_available_and_actual_devices(monkeypatch):
 
     info = backend.runtime_info()
 
-    assert info["engine"] == "openvino"
     assert info["openvino"]
     assert info["available_devices"] == "CPU, GPU"
     assert info["device"] == "GPU"

@@ -171,23 +171,3 @@ def _resolve_value(cli_value: _T | None, config_value: _T | None, default: _T) -
     if config_value is not None:
         return config_value
     return default
-
-
-def apply_device_defaults(
-    defaults: ResolvedConfig,
-    resolved_device: str,
-    cli_values: CliValues,
-    config: ConfigValues,
-) -> ResolvedConfig:
-    """Применяет device-aware дефолты для model и compute_type,
-    если они не были явно заданы через CLI или конфиг."""
-    device_defs = DEVICE_DEFAULTS.get(resolved_device, {})
-    if not device_defs:
-        return defaults
-
-    result = dict(defaults)
-    for key in ("model", "compute_type"):
-        if cli_values.get(key) is None and key not in config:
-            if key in device_defs:
-                result[key] = device_defs[key]
-    return cast(ResolvedConfig, result)

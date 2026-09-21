@@ -167,7 +167,6 @@ class FasterWhisperBackend:
         except Exception as exc:  # noqa: BLE001 — диагностика не должна ронять запуск
             cuda_devices = f"недоступно ({exc})"
         return {
-            "engine": "faster-whisper",
             "faster_whisper": package_version("faster-whisper"),
             "ctranslate2": package_version("ctranslate2"),
             "cuda_devices": cuda_devices,

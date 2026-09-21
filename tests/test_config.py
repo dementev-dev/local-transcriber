@@ -3,7 +3,6 @@ from unittest.mock import patch
 import pytest
 
 from local_transcriber.config import (
-    apply_device_defaults,
     find_config_file,
     load_config,
     resolve_defaults,
@@ -136,54 +135,6 @@ def test_resolve_defaults_diarize_priority(cli_value, config_value, expected):
     assert resolve_defaults(cli, config)["diarize"] is expected
 
 
-def test_apply_device_defaults_cuda():
-    defaults = {"model": "medium", "language": "ru", "device": "auto", "compute_type": "float32"}
-    cli = {"model": None, "language": None, "device": None, "compute_type": None}
-    result = apply_device_defaults(defaults, "cuda", cli, {})
-    assert result["model"] == "medium"
-    assert result["compute_type"] == "float16"
-
-
-def test_apply_device_defaults_cpu():
-    defaults = {"model": "medium", "language": "ru", "device": "auto", "compute_type": "float32"}
-    cli = {"model": None, "language": None, "device": None, "compute_type": None}
-    result = apply_device_defaults(defaults, "cpu", cli, {})
-    assert result["model"] == "medium"
-    assert result["compute_type"] == "float32"
-
-
-def test_apply_device_defaults_onnx_uses_readable_model():
-    defaults = {
-        "model": "medium",
-        "language": "ru",
-        "device": "auto",
-        "compute_type": "float32",
-    }
-    cli = {"model": None, "language": None, "device": None, "compute_type": None}
-
-    result = apply_device_defaults(defaults, "onnx", cli, {})
-
-    assert result["model"] == "gigaam-v3-e2e-rnnt"
-    assert result["compute_type"] == "int8"
-
-
-def test_apply_device_defaults_cli_overrides():
-    defaults = {"model": "large-v3", "language": "ru", "device": "auto", "compute_type": "int8"}
-    cli = {"model": "large-v3", "language": None, "device": None, "compute_type": "int8"}
-    result = apply_device_defaults(defaults, "cuda", cli, {})
-    assert result["model"] == "large-v3"
-    assert result["compute_type"] == "int8"
-
-
-def test_apply_device_defaults_config_overrides():
-    defaults = {"model": "small", "language": "ru", "device": "auto", "compute_type": "int8"}
-    cli = {"model": None, "language": None, "device": None, "compute_type": None}
-    config = {"model": "small", "compute_type": "int8"}
-    result = apply_device_defaults(defaults, "cuda", cli, config)
-    assert result["model"] == "small"
-    assert result["compute_type"] == "int8"
-
-
 def test_load_config_openvino_device(tmp_path):
     config = tmp_path / "config.toml"
     config.write_text('device = "openvino"\n')
@@ -203,27 +154,3 @@ def test_load_config_openvino_cpu_device(tmp_path):
     config.write_text('device = "openvino-cpu"\n')
     result = load_config(config)
     assert result == {"device": "openvino-cpu"}
-
-
-def test_apply_device_defaults_openvino():
-    defaults = {"model": "medium", "language": "ru", "device": "auto", "compute_type": "float32"}
-    cli = {"model": None, "language": None, "device": None, "compute_type": None}
-    result = apply_device_defaults(defaults, "openvino", cli, {})
-    assert result["model"] == "medium"
-    assert result["compute_type"] == "int8"
-
-
-def test_apply_device_defaults_openvino_gpu():
-    defaults = {"model": "medium", "language": "ru", "device": "auto", "compute_type": "float32"}
-    cli = {"model": None, "language": None, "device": None, "compute_type": None}
-    result = apply_device_defaults(defaults, "openvino-gpu", cli, {})
-    assert result["model"] == "medium"
-    assert result["compute_type"] == "int8"
-
-
-def test_apply_device_defaults_openvino_cpu():
-    defaults = {"model": "medium", "language": "ru", "device": "auto", "compute_type": "float32"}
-    cli = {"model": None, "language": None, "device": None, "compute_type": None}
-    result = apply_device_defaults(defaults, "openvino-cpu", cli, {})
-    assert result["model"] == "medium"
-    assert result["compute_type"] == "int8"

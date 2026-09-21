@@ -2,7 +2,6 @@
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
 
 # Единый признак «язык неизвестен» для всех бэкендов
 UNKNOWN_LANGUAGE = "unknown"
@@ -81,15 +80,6 @@ class TranscribeResult:
     duration: float  # seconds
     device_used: str  # "cpu" / "cuda" / "onnx" / "openvino-gpu" / "openvino-cpu"
     words: list[Word] = field(default_factory=list)
-
-
-@dataclass
-class TranscribeFileResult:
-    result: TranscribeResult
-    model: Any  # backend-specific model handle
-    actual_device: str
-    backend: Any = None  # backend instance (для переиспользования в батче)
-    model_path: str = ""  # путь к модели (меняется при cross-backend fallback)
 
 
 StatusCallback = Callable[[str], None] | None

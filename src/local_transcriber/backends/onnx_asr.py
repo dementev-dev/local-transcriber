@@ -229,7 +229,6 @@ class OnnxAsrBackend:
 
         configured = ", ".join(self._providers)
         return {
-            "engine": "onnx-asr",
             "onnxruntime": package_version("onnxruntime"),
             "onnx_asr": package_version("onnx-asr"),
             "available_providers": ", ".join(onnxruntime.get_available_providers()),

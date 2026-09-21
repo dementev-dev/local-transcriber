@@ -10,9 +10,8 @@ from local_transcriber.backends import get_backend
 from local_transcriber.config import DEVICE_DEFAULTS, HARDCODED_DEFAULTS
 
 # Re-export из types.py для обратной совместимости
-from local_transcriber.types import (
+from local_transcriber.types import (  # noqa: F401
     Segment,
-    TranscribeFileResult,
     TranscribeResult,
     WordTimestampsUnavailableError,
 )
@@ -228,120 +227,6 @@ def _describe_device(device: str) -> str:
     return "CPU"
 
 
-def load_model(
-    model_name: str,
-    device: str,
-    compute_type: str,
-    on_status: Callable[[str], None] | None = None,
-    strict_device: bool = False,
-    compute_type_explicit: bool = False,
-    cpu_threads: int = 0,
-) -> tuple[Any, str, Any, str]:
-    """Загружает модель: ensure + create с fallback.
-
-    Возвращает (model, actual_device, backend, model_path).
-    compute_type_explicit: True если пользователь явно указал --compute-type.
-    cpu_threads: число потоков для CPU inference (0 = дефолт библиотеки).
-    """
-    backend = get_backend(device, compute_type_explicit=compute_type_explicit)
-    actual_device = device
-
-    model_path = backend.ensure_model_available(model_name, compute_type, on_status)
-
-    try:
-        _notify_status(on_status, f"Инициализирую модель на {device}...")
-        model = backend.create_model(
-            model_path, device, compute_type, cpu_threads=cpu_threads
-        )
-        # Резолвим actual_device по реальному OpenVINO device
-        ov_dev = getattr(backend, "actual_ov_device", None)
-        if ov_dev == "GPU" and actual_device != "openvino-gpu":
-            actual_device = "openvino-gpu"
-        elif (
-            ov_dev == "CPU"
-            and actual_device.startswith("openvino")
-            and actual_device != "openvino-cpu"
-        ):
-            actual_device = "openvino-cpu"
-    except (RuntimeError, ValueError) as exc:
-        if device != "cpu" and _is_backend_error(exc, device):
-            if strict_device:
-                raise
-            warnings.warn(
-                f"Не удалось загрузить модель на {device}: {exc}. Переключение на CPU.",
-                stacklevel=2,
-            )
-            actual_device = "cpu"
-            backend = get_backend("cpu")
-            model_path = backend.ensure_model_available(
-                model_name, compute_type, on_status
-            )
-            _notify_status(on_status, "Инициализирую модель на cpu...")
-            model = backend.create_model(
-                model_path, "cpu", compute_type, cpu_threads=cpu_threads
-            )
-        else:
-            raise
-
-    return model, actual_device, backend, model_path
-
-
-def _transcribe_file(
-    model: Any,
-    actual_device: str,
-    backend: Any,
-    model_path: str,
-    file_path: Path,
-    model_name: str,
-    compute_type: str,
-    language: str | None = None,
-    on_segment: Callable[[Segment], None] | None = None,
-    on_status: Callable[[str], None] | None = None,
-    strict_device: bool = False,
-    cpu_threads: int = 0,
-) -> TranscribeFileResult:
-    """Транскрибирует один файл. При mid-stream fallback перезагружает модель."""
-    lang_arg = language if language and language != "auto" else None
-
-    try:
-        _notify_status(on_status, "Транскрибирую...")
-        result = backend.transcribe(model, file_path, lang_arg, on_segment, on_status)
-        result.device_used = actual_device
-    except (RuntimeError, ValueError) as exc:
-        if actual_device != "cpu" and _is_backend_error(exc, actual_device):
-            if strict_device:
-                raise
-            warnings.warn(
-                f"Ошибка при транскрипции на {actual_device}: {exc}. "
-                "Переключение на CPU и повтор.",
-                stacklevel=2,
-            )
-            actual_device = "cpu"
-            backend = get_backend("cpu")
-            model_path = backend.ensure_model_available(
-                model_name, compute_type, on_status
-            )
-            _notify_status(on_status, "Инициализирую модель на cpu...")
-            model = backend.create_model(
-                model_path, "cpu", compute_type, cpu_threads=cpu_threads
-            )
-            _notify_status(on_status, "Транскрибирую...")
-            result = backend.transcribe(
-                model, file_path, lang_arg, on_segment, on_status
-            )
-            result.device_used = actual_device
-        else:
-            raise
-
-    return TranscribeFileResult(
-        result=result,
-        model=model,
-        actual_device=actual_device,
-        backend=backend,
-        model_path=model_path,
-    )
-
-
 def transcribe(
     file_path: Path,
     model_name: str | None = None,
@@ -377,8 +262,6 @@ def ensure_model_available(
     on_status: Callable[[str], None] | None = None,
 ) -> str:
     """Публичный helper: гарантирует наличие модели для указанного бэкенда."""
-    from local_transcriber.config import DEVICE_DEFAULTS, HARDCODED_DEFAULTS
-
     if compute_type is None:
         device_defs = DEVICE_DEFAULTS.get(device, {})
         compute_type = device_defs.get(

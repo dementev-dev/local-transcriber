@@ -706,7 +706,6 @@ class TestRuntimeInfo:
 
         info = backend.runtime_info()
 
-        assert info["engine"] == "onnx-asr"
         assert info["onnxruntime"]
         assert info["onnx_asr"]
         assert info["available_providers"] == "CoreMLExecutionProvider, CPUExecutionProvider"
