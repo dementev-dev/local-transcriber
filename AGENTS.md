@@ -28,8 +28,9 @@ CLI (cli.py)
   → config.py      cascade: CLI arg → .transcriber.toml → device-aware default → hardcoded
   → utils.py       detect_device(), validate files, expand globs (Windows workaround)
   → context_menu.py Windows SendTo: Transcribe.cmd install/uninstall (--install-menu / --uninstall-menu)
-  → transcriber.py load_model() → get_backend(device) → ensure_model_available → create_model
-                    _transcribe_file() with mid-stream CUDA→CPU fallback
+  → transcriber.py Transcriber(ExecutionRequest): resolves auto + device defaults,
+                    get_backend(device) → ensure_model_available → create_model once per run,
+                    transcribe(file) per file; fallback and ExecutionInfo stay inside
   → formatter.py   segments → markdown with timestamps, paragraph grouping (>2s pause or >60s)
 ```
 
@@ -47,19 +48,21 @@ Three backends implement the `Backend` Protocol (structural typing, no inheritan
 
 ### Key design decisions
 
-- **Two-level fallback**: GPU→CPU at model load time AND mid-stream during transcription (GPU visible via nvidia-smi but insufficient VRAM).
+- **Execution module** (`Transcriber`): one owner per run for model handle, adapter, actual device and allowed GPU→CPU fallback (load time and mid-stream). Callers get `TranscribeResult` + `ExecutionInfo` (requested vs actual device, engine, model, compute type, threads, `runtime_info()` from the adapter for `--verbose`). Fallback is reachable only with `strict_device=False` (Python API): CLI explicit device is strict, `auto` is ONNX CPU.
 - **CUDA bootstrap** (`_cuda_bootstrap.py`): preloads `libcublas.so.12` via `ctypes.CDLL(RTLD_GLOBAL)` before importing ctranslate2, because pip's `nvidia-cublas-cu12` installs to a non-standard path and `LD_LIBRARY_PATH` can't be changed at runtime (glibc caches it).
-- **Batch mode**: 3-phase pipeline (prescan → load model once → transcribe all). `TranscribeFileResult` carries updated model/backend/device state between files.
-- **Device-aware defaults**: `compute_type` and `model` vary by device (float16 for CUDA, int8 for OpenVINO, float32 for CPU). Defined in `config.py` `DEVICE_DEFAULTS`.
+- **Batch mode**: 3-phase pipeline (prescan → create `Transcriber` → transcribe all). No state is carried between files by the CLI.
+- **Device-aware defaults**: `compute_type` and `model` vary by device (float16 for CUDA, int8 for OpenVINO, float32 for CPU). Defined in `config.py` `DEVICE_DEFAULTS`, applied by `Transcriber` when the request leaves them `None`.
+- **ONNX thread budget**: `--threads` sets `intra_op_num_threads` for both ASR and VAD sessions via `SessionOptions`; 0 keeps onnxruntime defaults.
 - **OpenVINO uses pre-quantized models** — `compute_type` selects which HF repo to download, not a runtime parameter.
 
 ## Testing
 
 All tests mock backends — no real model downloads or transcription. Key test patterns:
 
-- CLI tests: `typer.testing.CliRunner` + mocks for `load_config`, `detect_device`, `load_model`, `_transcribe_file`, `write_transcript`
-- `_single_patches()` — helper assembling standard happy-path mock set
-- `_make_result()` / `_make_tfr()` — factories for test data
+- CLI tests: `typer.testing.CliRunner` with the real `Transcriber` and a fake adapter patched at `local_transcriber.transcriber.get_backend`; `load_config`, `validate_input_file`, `write_transcript` mocked
+- `_cli_run()` — context manager assembling that standard set, yields `(backend, write_transcript)`
+- `_make_result()` / `_make_backend()` — factories for test data
+- Module tests (`test_transcriber.py`): `Transcriber` through its interface with `_make_run_backend()`; adapter tests patch the libraries (`onnx_asr.load_model`, `faster_whisper.WhisperModel`)
 
 ## Common tasks
 

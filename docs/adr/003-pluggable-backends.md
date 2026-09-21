@@ -44,21 +44,38 @@ CUDA bootstrap вызывается только при создании CUDA-м
 - `onnx` → OnnxAsrBackend
 - `auto` → ONNX на CPU независимо от `nvidia-smi` и установки extra
 
-### load_model() — единственный владелец pipeline
+### Transcriber — единственный владелец загрузки и исполнения
 
-`load_model()` выполняет ensure_model_available + create_model в одном вызове.
-CLI не вызывает ensure_model_available отдельно — это убирает двойной resolution
-и гарантирует, что модель скачивается для правильного бэкенда.
+Обновлено 2026-09-21. `Transcriber(ExecutionRequest)` в `transcriber.py`
+разрешает `auto` и device-aware умолчания, выполняет ensure_model_available +
+create_model в одном месте и держит модель, adapter и фактическое исполнение
+на весь запуск. CLI не вызывает `get_backend` и не хранит handles.
+
+Внутри module различаются три вещи: поддерживаемая модель, движок
+распознавания (`faster-whisper`, `openvino`, `onnx-asr`) и способ исполнения.
+Значение `device` из CLI/TOML сохраняется как вход: таблица `_ENGINES`
+сопоставляет ему движок, а аппаратную часть (CPU, CUDA, Intel GPU, список
+providers) трактует adapter. Новое исполнение — строка таблицы и его
+понимание в adapter'е, не новая иерархия adapters.
 
 ### Cross-backend fallback
 
-Fallback живёт в `transcriber.py` (оркестратор), не в бэкендах:
+Fallback живёт внутри `Transcriber`, не в бэкендах и не в CLI:
 - CUDA ошибка → CPU (FasterWhisper)
 - OpenVINO ошибка → CPU (FasterWhisper)
-- `strict_device=True` (явный device из CLI или TOML) → ошибка без fallback
+- strict запуск (явный device из CLI или TOML) → ошибка без fallback
 
-При fallback в батч-режиме обновляются model, backend, model_path и actual_device
-через TranscribeFileResult — следующий файл использует правильный бэкенд.
+После перехода module сам держит новое состояние; следующий файл батча
+использует его без участия caller. `WordTimestampsUnavailableError`
+и ошибки пользовательских данных переходом не считаются.
+
+### Диагностика исполнения
+
+Каждый adapter отдаёт `runtime_info()` — версии runtime и фактическую
+конфигурацию (для ONNX — доступные providers и те, что заданы сессиям ASR
+и VAD, квантизация, бюджет потоков). `Transcriber` включает их в
+`ExecutionInfo`; CLI печатает их в `--verbose`. Наличие provider в wheel не
+считается доказательством выполнения графа на GPU/NPU.
 
 ### Аудио для OpenVINO
 
@@ -83,7 +100,7 @@ macOS; ONNX обеспечивает автоматический CPU-путь �
 
 ## Последствия
 
-- Обратная совместимость: `transcribe()` сохранён; `load_model()` изменил сигнатуру (возвращает 4-tuple вместо 2-tuple, добавлен `compute_type_explicit`)
+- Обратная совместимость: `transcribe()` сохранён; `load_model()` и `_transcribe_file()` удалены (2026-09-21)
 - Новый бэкенд добавляется одним файлом в `backends/` + регистрацией в `__init__.py`
 - Модели скачиваются по запросу — CUDA пользователь не качает OpenVINO модели, и наоборот
 - ARM и macOS: OpenVINO не ставится (platform markers), auto использует ONNX
