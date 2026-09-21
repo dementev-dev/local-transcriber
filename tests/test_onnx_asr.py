@@ -1,6 +1,7 @@
 """Tests for onnx-asr backend."""
 
 import warnings
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -64,12 +65,12 @@ class TestEnsureModelAvailable:
             def with_timestamps(self):
                 return self
 
-        def fake_load_model(*, model, quantization):
+        def fake_load_model(*, model, quantization, providers):
             quantizations.append(quantization)
             return FakeAsrAdapter()
 
         monkeypatch.setattr("onnx_asr.load_model", fake_load_model)
-        monkeypatch.setattr("onnx_asr.load_vad", lambda model: None)
+        monkeypatch.setattr("onnx_asr.load_vad", lambda model, **kwargs: None)
 
         backend = OnnxAsrBackend(compute_type_explicit=False)
         model_id = backend.ensure_model_available(
@@ -87,6 +88,26 @@ class TestEnsureModelAvailable:
 
 
 class TestCreateModel:
+    def test_cpu_provider_is_explicit_for_asr_and_vad(self, monkeypatch):
+        """Доступность CoreML/CUDA не меняет исполнение ASR и VAD."""
+        monkeypatch.setattr(
+            "onnxruntime.get_available_providers",
+            lambda: ["CoreMLExecutionProvider", "CUDAExecutionProvider", "CPUExecutionProvider"],
+        )
+        load_asr = MagicMock()
+        load_vad = MagicMock()
+        monkeypatch.setattr("onnx_asr.load_model", load_asr)
+        monkeypatch.setattr("onnx_asr.load_vad", load_vad)
+
+        OnnxAsrBackend().create_model("gigaam-v3-e2e-rnnt", "onnx", "int8")
+
+        load_asr.assert_called_once_with(
+            model="gigaam-v3-e2e-rnnt",
+            quantization="int8",
+            providers=["CPUExecutionProvider"],
+        )
+        load_vad.assert_called_once_with("silero", providers=["CPUExecutionProvider"])
+
     def test_wraps_vad_model_with_timestamps(self, monkeypatch):
         timestamped_model = object()
 
@@ -99,7 +120,7 @@ class TestCreateModel:
                 return FakeVadAdapter()
 
         monkeypatch.setattr("onnx_asr.load_model", lambda **kwargs: FakeAsrAdapter())
-        monkeypatch.setattr("onnx_asr.load_vad", lambda model: object())
+        monkeypatch.setattr("onnx_asr.load_vad", lambda model, **kwargs: object())
 
         model = OnnxAsrBackend().create_model("gigaam-v3-e2e-rnnt", "onnx", "int8")
 
@@ -127,6 +148,7 @@ class TestCreateModel:
                 return self
 
         monkeypatch.setattr("onnx_asr.load_model", fake_load_model)
+        monkeypatch.setattr("onnx_asr.load_vad", lambda model, **kwargs: None)
 
         backend = OnnxAsrBackend()
         backend.actual_compute_type = "int8"

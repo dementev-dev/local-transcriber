@@ -66,17 +66,17 @@ def test_detect_device_explicit_passthrough():
     assert detect_device("openvino-cpu") == "openvino-cpu"
 
 
-def test_detect_device_auto_cuda_when_nvidia_smi_available():
-    """При доступном nvidia-smi auto выбирает CUDA."""
+def test_detect_device_auto_onnx_when_nvidia_smi_available():
+    """При доступном nvidia-smi auto остаётся на ONNX CPU."""
     with patch(
-        "local_transcriber.utils.shutil.which", return_value="/usr/bin/nvidia-smi"
+        "shutil.which", return_value="/usr/bin/nvidia-smi"
     ):
-        assert detect_device("auto") == "cuda"
+        assert detect_device("auto") == "onnx"
 
 
 def test_detect_device_auto_onnx_without_cuda():
     """Без CUDA auto выбирает ONNX CPU."""
-    with patch("local_transcriber.utils.shutil.which", return_value=None):
+    with patch("shutil.which", return_value=None):
         assert detect_device("auto") == "onnx"
 
 

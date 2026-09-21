@@ -2,7 +2,6 @@
 
 import glob
 import platform
-import shutil
 import subprocess
 import warnings
 from pathlib import Path
@@ -16,15 +15,13 @@ SUPPORTED_EXTENSIONS = {
 def detect_device(requested: str = "auto") -> str:
     """Определяет устройство для вычислений.
 
-    При ``requested="auto"`` выбирает CUDA при наличии ``nvidia-smi``,
-    иначе ONNX на CPU.
+    При ``requested="auto"`` всегда выбирает ONNX на CPU.
+    CUDA включается только явным выбором пользователя.
     ``"openvino"`` — алиас для авто-детекта внутри OpenVINO
     (GPU если доступен, иначе CPU).
     Возвращает всегда конкретное значение (не абстрактный ``"openvino"``).
     """
     if requested == "auto":
-        if shutil.which("nvidia-smi") is not None:
-            return "cuda"
         return "onnx"
     if requested == "openvino":
         if _is_openvino_gpu_available():

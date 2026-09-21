@@ -200,8 +200,9 @@ class OnnxAsrBackend:
         model = onnx_asr.load_model(
             model=model_path,
             quantization=quantization,
+            providers=["CPUExecutionProvider"],
         )
-        vad = onnx_asr.load_vad("silero")
+        vad = onnx_asr.load_vad("silero", providers=["CPUExecutionProvider"])
         self._vad = vad
         return model.with_vad(vad).with_timestamps()
 
@@ -278,7 +279,7 @@ class OnnxAsrBackend:
             fallback = _whisper_fallback_model(model_name)
             raise ValueError(
                 f"Модель '{model_name}' относится к Whisper и не поддерживается "
-                "ONNX-бэкендом. Без CUDA --device auto выбирает ONNX; "
+                "ONNX-бэкендом. --device auto всегда выбирает ONNX CPU; "
                 f"укажите --device openvino-cpu --model {model_name} на x86, "
                 f"--device cpu --model {fallback} на любой платформе "
                 f"или --device cuda --model {fallback} при NVIDIA GPU."
