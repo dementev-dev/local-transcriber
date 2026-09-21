@@ -8,7 +8,7 @@ transcribe meeting.mp4
 ```
 
 - **Полностью локально** — данные не покидают машину
-- **Авто-ускорение** — NVIDIA CUDA при наличии GPU, иначе ONNX на CPU
+- **ONNX на CPU по умолчанию** — CUDA и OpenVINO включаются явно
 - **Батч-режим** — обработка нескольких файлов за один вызов
 - **Разделение говорящих** — локальная диаризация по флагу `--diarize`
 - **Из проводника Windows** — пункт Transcribe в меню «Отправить» ([установка](#контекстное-меню-проводника-windows))
@@ -50,18 +50,16 @@ transcribe --install-menu
 
 Подробнее — в разделе [контекстное меню проводника](#контекстное-меню-проводника-windows).
 
-**4. Ускорение (ставится автоматически):**
+**4. Выбор исполнения:**
 
-- **NVIDIA CUDA** (GPU): если есть GPU — транскрипция в 5-10× быстрее
-  - **Windows**: `winget install -e --id Nvidia.CUDA --version 12.9` (от администратора), перезапустить терминал
-  - **Linux / WSL2**: работает из коробки (нужен только драйвер: `nvidia-smi`)
-- **Без NVIDIA GPU**: автоматически используется ONNX с GigaAM RNN-T на CPU.
-  Эта модель понимает только русскую речь
-- **Другие языки без NVIDIA**: выбирайте Whisper явно —
-  `--device openvino-cpu --model medium` на x86 или `--device cpu --model medium`
-  на любой платформе
-- **OpenVINO** для Intel GPU или x86 CPU остаётся доступен через явный
-  `--device openvino`, `--device openvino-gpu` или `--device openvino-cpu`
+- По умолчанию используется ONNX с GigaAM RNN-T на CPU, независимо от наличия
+  NVIDIA. Эта модель понимает только русскую речь.
+- Для других языков выбирайте Whisper явно:
+  `--device openvino-cpu --model medium` на x86 или `--device cpu --model medium`.
+- OpenVINO для Intel GPU или x86 CPU доступен через `--device openvino`,
+  `--device openvino-gpu` или `--device openvino-cpu`.
+- Для NVIDIA установите дополнительные библиотеки и выберите CUDA явно:
+  [подключение CUDA](#подключение-cuda).
 
 **5. Готово:**
 
@@ -132,17 +130,73 @@ HuggingFace Hub использует симлинки для экономии м
 
 </details>
 
+## Подключение CUDA
+
+Обычная установка не требует NVIDIA-пакетов. Extra `cuda` добавляет cuBLAS
+в окружение приложения на Linux/WSL x86_64 и Windows x64. Полный системный
+CUDA Toolkit и ручная правка системного PATH для этого пути не нужны.
+Совместимые GPU и драйвер NVIDIA необходимы отдельно: extra не устанавливает
+драйвер и не исправляет несовместимость старой видеокарты.
+
+Для установки из Git или подключения CUDA к уже установленной программе:
+
+```bash
+uv tool install --python 3.13 --force "local-transcriber[cuda] @ git+https://git.dementev.space/ddmitry/local-transcriber.git"
+```
+
+Из клона репозитория:
+
+```bash
+uv tool install --python 3.13 --force ".[cuda]"
+```
+
+Для локальной разработки:
+
+```bash
+uv sync --extra cuda
+uv run --extra cuda transcribe meeting.mp4 --device cuda
+```
+
+После установки extra выберите CUDA при запуске:
+
+```bash
+transcribe meeting.mp4 --device cuda
+```
+
+Либо задайте в `.transcriber.toml`:
+
+```toml
+device = "cuda"
+```
+
+Установка extra сама по себе не меняет `auto`: он всегда использует ONNX CPU.
+Явная CUDA при ошибке завершает обработку с исходной причиной и подсказкой,
+без молчаливого перехода на CPU. В батче ошибка учитывается для каждого файла.
+
+На Windows нужен также [Visual C++ Runtime x64](https://aka.ms/vs/17/release/vc_redist.x64.exe).
+Состав DLL проверен для закреплённых версий CTranslate2 и cuBLAS;
+реальный прогон нового пути на Windows без Toolkit пока не выполнен.
+Подробности и ограничения проверки — [ADR-001](docs/adr/001-cuda-bootstrap.md).
+
+При обновлении из старой установки:
+
+- Для CPU повторите обычную команду `uv tool install` с `--force` без `[cuda]`.
+  В окружении разработки выполните `uv sync` — прежняя обязательная cuBLAS будет удалена.
+- Для CUDA повторите соответствующую команду выше. Старый автоматический выбор
+  по `nvidia-smi` больше не действует; сохраните `device = "cuda"` в конфиге
+  либо передавайте `--device cuda`.
+
 ## Использование
 
 ```bash
-# Простой запуск (CUDA medium или ONNX GigaAM RNN-T, язык ru)
+# Простой запуск (ONNX GigaAM RNN-T на CPU, язык ru)
 transcribe meeting.mp4
 
 # Указать язык
-transcribe lecture.mp3 --language en
+transcribe lecture.mp3 --device cpu --model medium --language en
 
 # Максимальное качество на NVIDIA GPU
-transcribe podcast.wav --model large-v3 --compute-type float16
+transcribe podcast.wav --device cuda --model large-v3 --compute-type float16
 
 # Максимальное качество на Intel GPU
 transcribe podcast.wav --model large-v3 --device openvino-gpu
@@ -243,7 +297,7 @@ transcribe --uninstall-menu
 | Опция | Сокращение | По умолчанию | Описание |
 |-------|-----------|-------------|----------|
 | `--model` | `-m` | medium (CUDA) / gigaam-v3-e2e-rnnt (ONNX) | Модель распознавания |
-| `--language` | `-l` | `ru` | Язык (ru, en, auto и др.); автоматический профиль без NVIDIA понимает только русский |
+| `--language` | `-l` | `ru` | Язык (ru, en, auto и др.); автоматический профиль понимает только русский |
 | `--output` | `-o` | `<файл>-transcript.md` | Путь к выходному файлу |
 | `--device` | `-d` | `auto` | Устройство (auto, cpu, cuda, openvino, openvino-gpu, openvino-cpu, onnx) |
 | `--compute-type` | — | float16 (CUDA) / int8 (ONNX/OpenVINO) / float32 (CPU) | Тип вычислений |
@@ -260,7 +314,7 @@ transcribe --uninstall-menu
 | CPU через ONNX | ✅ авто | ✅ авто | ✅ авто |
 | OpenVINO (x86 CPU) | ✅ явно | — | ✅ явно |
 | OpenVINO (Intel GPU) | ✅ явно | — | ✅ явно |
-| GPU (NVIDIA) | ✅ авто | — | ✅ (нужен CUDA 12) |
+| GPU (NVIDIA) | extra + явно (x86_64) | — | extra + явно (x64; прогон без Toolkit ожидается) |
 
 Данные по macOS основаны на доступности пакетов onnxruntime: прогонов на этой
 платформе не было.
@@ -269,9 +323,9 @@ transcribe --uninstall-menu
 <summary>Linux / WSL2</summary>
 
 - **Intel GPU** (Arc, встроенная графика) работает из коробки через OpenVINO
-- **NVIDIA GPU** работает из коробки — cuBLAS ставится автоматически как зависимость
-- Нужен только драйвер NVIDIA (проверка: `nvidia-smi`)
-- На ARM (aarch64) cuBLAS через pip недоступен — нужен системный CUDA toolkit
+- **NVIDIA GPU**: [extra `cuda` и явный выбор](#подключение-cuda), отдельно совместимый драйвер
+- `nvidia-smi` проверяет наличие драйвера, но не доказывает совместимость GPU с runtime
+- CUDA extra на ARM (aarch64) этим проектом не поддерживается
 
 </details>
 
@@ -288,13 +342,9 @@ transcribe --uninstall-menu
 
 - CPU работает из коробки
 - **Intel GPU** (Arc, встроенная графика) работает из коробки через OpenVINO
-- Для **NVIDIA GPU** нужен **CUDA 12** (ctranslate2 4.7 не совместим с CUDA 11 и 13):
-  ```
-  winget install -e --id Nvidia.CUDA --version 12.9
-  ```
-  > `winget install` требует запуска от имени администратора (elevated terminal).
-  > `uv tool install` работает без админа (ставит в пользовательскую директорию).
-- После установки CUDA перезапустите терминал
+- **NVIDIA GPU**: [extra `cuda` и явный выбор](#подключение-cuda), отдельно совместимый драйвер
+- Требуется Visual C++ Runtime x64; системный CUDA Toolkit не нужен для extra
+- Реальная транскрипция с extra без Toolkit пока не проверена на Windows
 
 </details>
 
@@ -318,8 +368,8 @@ diarize = true
 `--diarize` и `--no-diarize` позволяют переопределить `diarize` из конфига для
 отдельного запуска.
 
-При `device = "auto"` выбирается CUDA, если доступен `nvidia-smi`, иначе ONNX.
-Явный `device` из CLI или конфига отключает этот автоматический выбор.
+При `device = "auto"` всегда выбирается ONNX CPU, даже если доступны
+`nvidia-smi` и extra `cuda`. Другие варианты выбираются явно из CLI или конфига.
 Каталоги моделей различаются между бэкендами, поэтому при закреплении `model`
 в конфиге рекомендуется явно закрепить и совместимый `device`. То же с языком:
 автоматический ONNX-профиль рассчитан на русскую речь, а для остальных языков
@@ -336,9 +386,9 @@ diarize = true
 ## Модели и GPU
 
 Рекомендации:
-- **По умолчанию без CUDA:** ONNX `gigaam-v3-e2e-rnnt` — читаемый русский текст с
+- **По умолчанию:** ONNX `gigaam-v3-e2e-rnnt` — читаемый русский текст с
   пунктуацией почти без потери скорости относительно сырого `gigaam-v3`
-- **Макс. качество (NVIDIA):** `large-v3` + `--compute-type float16`
+- **Макс. качество (NVIDIA):** `--device cuda --model large-v3 --compute-type float16`
 - **Макс. качество (Intel GPU):** `large-v3` + `--device openvino-gpu`
 - **Макс. скорость CPU (русский):** `--device onnx --model gigaam-v3` (17-29× RTF, без пунктуации; рекомендуется LLM-нормализация терминов после)
 - **Быстрый OpenVINO с низким WER:** `--device openvino-cpu --model large-v3-turbo --compute-type int8` (7,2× RTFx на контрольном Intel CPU; пунктуация может быть слабой)
