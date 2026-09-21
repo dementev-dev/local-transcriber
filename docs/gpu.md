@@ -2,7 +2,7 @@
 
 ## Режимы `--device`
 
-- `auto` (по умолчанию) — CUDA при наличии `nvidia-smi`, иначе ONNX на CPU
+- `auto` (по умолчанию) — всегда ONNX на CPU
 - `cuda` — строго NVIDIA GPU, ошибка если недоступен
 - `openvino` — авто-выбор OpenVINO GPU или CPU
 - `openvino-gpu` — строго Intel GPU через OpenVINO
@@ -13,8 +13,8 @@
 
 | Оборудование | Рекомендуемый `--device` | Бэкенд | Ожидаемая скорость |
 |---|---|---|---|
-| NVIDIA GPU (6+ GB VRAM) | `auto` / `cuda` | faster-whisper (CTranslate2) | 7-19x реалтайм |
-| Любой CPU без NVIDIA | `auto` / `onnx` | ONNX GigaAM RNN-T | 10-14x реалтайм* |
+| NVIDIA GPU (6+ GB VRAM) | `cuda` + extra | faster-whisper (CTranslate2) | 7-19x реалтайм |
+| Любой CPU | `auto` / `onnx` | ONNX GigaAM RNN-T | 10-14x реалтайм* |
 | Intel Arc iGPU / dGPU | `openvino-gpu` | OpenVINO GenAI (GPU) | TBD |
 | Intel/AMD x86 CPU | `openvino-cpu` | OpenVINO GenAI (CPU) | 3-10x реалтайм* |
 | Любой CPU, FasterWhisper | `cpu` | faster-whisper (CTranslate2) | ~1.5x реалтайм |
@@ -22,7 +22,7 @@
 \* По результатам контрольных прогонов на Intel и AMD CPU. Реальная скорость
 зависит от CPU, модели и записи.
 
-Автоматический профиль без NVIDIA рассчитан на русскую речь: GigaAM других
+Автоматический профиль рассчитан на русскую речь: GigaAM других
 языков не понимает. Для них берите Whisper — `openvino-cpu` на x86 или `cpu`
 на любой платформе.
 
@@ -211,22 +211,16 @@ SMT/Hyper-Threading не помогает — 16 потоков на 8-ядер�
 
 ## Настройка по платформам
 
-### Linux / WSL2 (x86_64)
+Для Linux/WSL x86_64 и Windows x64 используется один extra `cuda` и явный
+выбор `--device cuda` либо `device = "cuda"` в TOML. Команды установки из Git,
+клона и для разработки приведены в [README](../README.md#подключение-cuda).
+Обычный запуск всегда использует ONNX CPU, независимо от драйвера и extra.
 
-Библиотека cuBLAS ставится автоматически (зависимость `nvidia-cublas-cu12` подтягивается при установке).
-Дополнительных шагов не требуется.
-
-> На ARM (aarch64) cuBLAS через pip недоступен — нужен системный CUDA toolkit.
-
-### Windows
-
-Нужен системный **CUDA 12** (ctranslate2 4.7 не совместим с CUDA 11 и 13):
-
-```bash
-winget install -e --id Nvidia.CUDA --version 12.9   # требует запуска от имени администратора
-```
-
-После установки перезапустите терминал.
+Драйвер NVIDIA устанавливается отдельно. Полный системный CUDA Toolkit не
+нужен для пути через extra; на Windows требуется Visual C++ Runtime x64.
+Состав Windows DLL проверен статически; реальная транскрипция без Toolkit
+пока не проверена. Версии и границы проверки — [ADR-001](adr/001-cuda-bootstrap.md).
+CUDA extra для ARM в этой задаче не поддерживается.
 
 ## Совместимость GPU
 
@@ -331,14 +325,19 @@ threshold не помогла — проблема inherent для модели 
 Убедитесь, что `nvidia-smi` возвращает информацию о GPU. Драйвер NVIDIA предоставляет `libcuda.so.1`,
 без которого CUDA не работает — его нельзя поставить через pip.
 
-### Windows: ошибка при загрузке модели на GPU
+### Отсутствующие библиотеки и несовместимый GPU
 
-GPU на Windows требует **CUDA 12** (ctranslate2 4.7 не совместим с CUDA 11 и 13). Установите:
-```bash
-winget install -e --id Nvidia.CUDA --version 12.9   # требует запуска от имени администратора
-```
-После установки перезапустите терминал.
+При отсутствии cuBLAS подключите extra в том окружении, откуда запускается
+программа, по [инструкции README](../README.md#подключение-cuda).
+На Windows ошибка загрузки DLL может также означать отсутствие Visual C++ Runtime.
+
+`no kernel image` / `invalid device function` означают несовместимость GPU
+с выбранной сборкой runtime. Установка extra её не исправит. Ошибки драйвера
+требуют проверки драйвера; нехватка VRAM — меньшей модели или явного выбора CPU.
+Исходная ошибка сохраняется. CLI/TOML с явной CUDA не переходят молча на CPU
+ни при загрузке, ни при распознавании.
 
 ### ARM (aarch64)
 
-cuBLAS через pip недоступен на ARM — нужен системный CUDA toolkit.
+CUDA extra не поддерживается проектом на этой архитектуре. Наличие отдельных
+NVIDIA wheels для ARM само по себе не подтверждает рабочий путь транскрипции.

@@ -6,16 +6,11 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-# CUDA bootstrap — должен быть ДО импорта faster_whisper / ctranslate2
+from huggingface_hub import snapshot_download
+from huggingface_hub.errors import LocalEntryNotFoundError
+
 from local_transcriber._cuda_bootstrap import ensure_cublas_loadable
-
-ensure_cublas_loadable()
-
-from faster_whisper import WhisperModel  # noqa: E402
-from huggingface_hub import snapshot_download  # noqa: E402
-from huggingface_hub.errors import LocalEntryNotFoundError  # noqa: E402
-
-from local_transcriber.types import (  # noqa: E402
+from local_transcriber.types import (
     Segment,
     TranscribeResult,
     Word,
@@ -94,6 +89,11 @@ class FasterWhisperBackend:
 
         cpu_threads: число потоков для CPU inference (0 = дефолт библиотеки, обычно 4).
         """
+        if device == "cuda":
+            ensure_cublas_loadable()
+
+        from faster_whisper import WhisperModel
+
         try:
             return WhisperModel(
                 model_path,

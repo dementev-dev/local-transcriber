@@ -688,7 +688,7 @@ def test_cli_load_model_called_with_model_name(tmp_path):
 
 
 def test_cli_windows_cuda_diagnostic(tmp_path):
-    """CUDA error on Windows prints choco/winget install hint."""
+    """При проблеме драйвера Windows не предлагает установку Toolkit."""
     audio = tmp_path / "test.mp3"
     audio.write_bytes(b"fake")
     model = _make_model()
@@ -712,8 +712,10 @@ def test_cli_windows_cuda_diagnostic(tmp_path):
         out = runner.invoke(app, [str(audio), "--device", "cuda"])
 
     assert out.exit_code == 1
-    assert "choco install cuda" in out.output
-    assert "winget install" in out.output
+    assert "драйвер" in out.output
+    assert "CUDA error: no device" in out.output
+    assert "winget install" not in out.output
+    assert "uv sync --extra" not in out.output
 
 
 def test_cli_linux_cuda_error_no_windows_hint(tmp_path):
@@ -742,6 +744,115 @@ def test_cli_linux_cuda_error_no_windows_hint(tmp_path):
 
     assert out.exit_code == 1
     assert "choco install cuda" not in out.output
+
+
+@pytest.mark.parametrize("from_config", [False, True])
+@pytest.mark.parametrize("phase", ["load", "single", "batch"])
+@pytest.mark.parametrize(
+    ("message", "hint", "install_hint"),
+    [
+        ("Library cublas64_12.dll is not found or cannot be loaded", "Не найдены", True),
+        ("libcublas.so.12: cannot open shared object file", "Не найдены", True),
+        ("CUDA error: no kernel image is available", "GPU несовместим", False),
+        ("CUDA driver version is insufficient for CUDA runtime version", "драйвер", False),
+        ("CUDA out of memory", "Недостаточно памяти", False),
+    ],
+)
+def test_explicit_cuda_errors_preserve_cause_without_fallback(
+    tmp_path, monkeypatch, from_config, phase, message, hint, install_hint
+):
+    """CLI/TOML сохраняют CUDA при загрузке, обработке одного файла и батча."""
+    monkeypatch.chdir(tmp_path)
+    files = [tmp_path / "one.wav"]
+    if phase == "batch":
+        files.append(tmp_path / "two.wav")
+    for file in files:
+        file.write_bytes(b"audio")
+    if from_config:
+        (tmp_path / ".transcriber.toml").write_text('device = "cuda"\n')
+    args = [str(file) for file in files]
+    if not from_config:
+        args += ["--device", "cuda"]
+    backend = _make_backend()
+    error = RuntimeError(message)
+    if phase == "load":
+        backend.create_model.side_effect = error
+    else:
+        backend.transcribe.side_effect = error
+
+    with patch("local_transcriber.transcriber.get_backend", return_value=backend) as get_backend:
+        out = runner.invoke(app, args)
+
+    assert out.exit_code == 1
+    assert message in out.output
+    assert hint in out.output
+    assert ("uv sync --extra cuda" in out.output) is install_hint
+    assert "winget install" not in out.output
+    assert "Переключение на CPU" not in out.output
+    assert all(call.args[0] == "cuda" for call in get_backend.call_args_list)
+
+
+def test_default_cli_stays_on_onnx_with_nvidia_driver(tmp_path, monkeypatch):
+    """Обычный запуск с nvidia-smi использует прежнюю CPU-модель ONNX."""
+    audio = tmp_path / "test.wav"
+    audio.write_bytes(b"audio")
+    backend = _make_backend()
+    backend.actual_ov_device = None
+    backend.actual_compute_type = "int8"
+    backend.transcribe.return_value = _make_result(device_used="onnx")
+    with (
+        patch("local_transcriber.cli.load_config", return_value={}),
+        patch("shutil.which", return_value="/usr/bin/nvidia-smi"),
+        patch("local_transcriber.transcriber.get_backend", return_value=backend) as get_backend,
+        patch("local_transcriber.cli.write_transcript"),
+    ):
+        out = runner.invoke(app, [str(audio)])
+
+    assert out.exit_code == 0, out.output
+    get_backend.assert_called_once_with("onnx", compute_type_explicit=False)
+    assert backend.ensure_model_available.call_args.args[:2] == ("gigaam-v3-e2e-rnnt", "int8")
+
+
+@pytest.mark.parametrize("from_config", [False, True])
+@pytest.mark.parametrize("phase", ["load", "single", "batch"])
+@pytest.mark.parametrize("device", ["cuda", "cpu"])
+@pytest.mark.parametrize("compute_type", ["float16", "int8"])
+def test_unsupported_compute_type_hint_requires_cuda_context(
+    tmp_path, monkeypatch, from_config, phase, device, compute_type
+):
+    """Одинаковая ошибка CTranslate2 получает CUDA-подсказку только на CUDA."""
+    monkeypatch.chdir(tmp_path)
+    files = [tmp_path / "one.wav"]
+    if phase == "batch":
+        files.append(tmp_path / "two.wav")
+    for file in files:
+        file.write_bytes(b"audio")
+    args = [str(file) for file in files]
+    if from_config:
+        (tmp_path / ".transcriber.toml").write_text(
+            f'device = "{device}"\ncompute_type = "{compute_type}"\n'
+        )
+    else:
+        args += ["--device", device, "--compute-type", compute_type]
+    message = (
+        f"Requested {compute_type} compute type, but the target device or backend "
+        f"do not support efficient {compute_type} computation."
+    )
+    backend = _make_backend()
+    error = ValueError(message)
+    if phase == "load":
+        backend.create_model.side_effect = error
+    else:
+        backend.transcribe.side_effect = error
+
+    with patch("local_transcriber.transcriber.get_backend", return_value=backend):
+        out = runner.invoke(app, args)
+
+    assert out.exit_code == 1
+    assert message in " ".join(out.output.split())
+    assert ("Тип вычислений несовместим" in out.output) is (device == "cuda")
+    assert "uv sync --extra cuda" not in out.output
+    assert "Переключение на CPU" not in out.output
 
 
 def test_cli_device_fallback_warning(tmp_path):

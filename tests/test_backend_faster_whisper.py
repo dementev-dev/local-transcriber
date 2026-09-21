@@ -7,6 +7,25 @@ from local_transcriber.backends.faster_whisper import FasterWhisperBackend
 from local_transcriber.types import Word
 
 
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_bootstrap_only_for_explicit_cuda(monkeypatch, device):
+    """CPU-модель не загружает optional CUDA-библиотеки."""
+    bootstrap = MagicMock()
+    model_factory = MagicMock()
+    monkeypatch.setattr(
+        "local_transcriber.backends.faster_whisper.ensure_cublas_loadable", bootstrap
+    )
+    monkeypatch.setattr("faster_whisper.WhisperModel", model_factory)
+
+    model = FasterWhisperBackend().create_model("/model", device, "float32")
+
+    assert model is model_factory.return_value
+    assert bootstrap.call_count == (1 if device == "cuda" else 0)
+    model_factory.assert_called_once_with(
+        "/model", device=device, compute_type="float32", cpu_threads=0
+    )
+
+
 def test_transcribe_returns_canonical_words(tmp_path):
     audio = tmp_path / "audio.wav"
     raw_word = SimpleNamespace(start=0.2, end=0.7, word=" Привет")

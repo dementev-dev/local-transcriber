@@ -288,9 +288,9 @@ name = "local-transcriber"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "ctranslate2" },
     { name = "faster-whisper" },
     { name = "httpx" },
-    { name = "nvidia-cublas-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "onnx-asr", extra = ["cpu", "hub"] },
     { name = "onnxruntime" },
     { name = "openvino-genai", marker = "(platform_machine == 'AMD64' and sys_platform != 'darwin') or (platform_machine == 'x86_64' and sys_platform != 'darwin')" },
@@ -298,6 +298,11 @@ dependencies = [
     { name = "sherpa-onnx" },
     { name = "socksio" },
     { name = "typer" },
+]
+
+[package.optional-dependencies]
+cuda = [
+    { name = "nvidia-cublas-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') or (platform_machine == 'x86_64' and sys_platform == 'win32')" },
 ]
 
 [package.dev-dependencies]
@@ -311,9 +316,10 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "ctranslate2", specifier = "==4.8.1" },
     { name = "faster-whisper", specifier = ">=1.2.1,<2" },
     { name = "httpx", specifier = ">=0.28,<1" },
-    { name = "nvidia-cublas-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = ">=12.4,<13" },
+    { name = "nvidia-cublas-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'cuda') or (platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'cuda') or (platform_machine == 'x86_64' and sys_platform == 'win32' and extra == 'cuda')", specifier = "==12.9.1.4" },
     { name = "onnx-asr", extras = ["cpu", "hub"], specifier = ">=0.12,<0.13" },
     { name = "onnxruntime", specifier = ">=1.28,<2" },
     { name = "openvino-genai", marker = "(platform_machine == 'AMD64' and sys_platform != 'darwin') or (platform_machine == 'x86_64' and sys_platform != 'darwin')", specifier = ">=2026.3.0.0,<2026.4" },
@@ -322,6 +328,7 @@ requires-dist = [
     { name = "socksio", specifier = ">=1.0.0,<2" },
     { name = "typer", specifier = ">=0.24.1,<1" },
 ]
+provides-extras = ["cuda"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -445,6 +452,7 @@ version = "12.9.1.4"
 source = { registry = "https://pypi.org/simple" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/77/3c/aa88abe01f3be3d1f8f787d1d33dc83e76fec05945f9a28fbb41cfb99cd5/nvidia_cublas_cu12-12.9.1.4-py3-none-manylinux_2_27_x86_64.whl", hash = "sha256:453611eb21a7c1f2c2156ed9f3a45b691deda0440ec550860290dc901af5b4c2", size = 581242350, upload-time = "2025-06-05T20:04:51.979Z" },
+    { url = "https://files.pythonhosted.org/packages/45/a1/a17fade6567c57452cfc8f967a40d1035bb9301db52f27808167fbb2be2f/nvidia_cublas_cu12-12.9.1.4-py3-none-win_amd64.whl", hash = "sha256:1e5fee10662e6e52bd71dec533fbbd4971bb70a5f24f3bc3793e5c2e9dc640bf", size = 553153899, upload-time = "2025-06-05T20:13:35.556Z" },
 ]
 
 [[package]]

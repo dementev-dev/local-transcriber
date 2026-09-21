@@ -1,78 +1,134 @@
-# ADR-001: Preload libcublas из pip-пакета для GPU на Linux/WSL2
+# ADR-001: Необязательная CUDA и загрузка cuBLAS из окружения
 
-**Статус**: Принято
+**Статус**: Принято; пересмотр обязательной cuBLAS от 2026-03-18
 **Дата**: 2026-03-18
+**Обновлено**: 2026-09-21, задача [#2](https://git.dementev.space/ddmitry/local-transcriber/issues/2)
 
 ## Контекст
 
-ctranslate2 (backend faster-whisper) в runtime делает `dlopen("libcublas.so.12")`,
-но не бандлит эту библиотеку в свой wheel — ожидает её в системе.
-Без установленного CUDA toolkit `uv run transcribe --device cuda` падает с ошибкой.
+CTranslate2 загружает cuBLAS динамически и не поставляет её в своём wheel.
+Прежняя обязательная зависимость добавляла около 581 MB скачивания на Linux
+x86_64, даже если пользователь работал только через ONNX CPU.
+Наличие `nvidia-smi` доказывает наличие утилиты драйвера, но не совместимость GPU
+с runtime. Автоматический выбор CUDA мог приводить к ошибке на старом GPU.
 
-Ключевые факты:
-- `libcuda.so.1` приходит от NVIDIA driver (всегда есть, если GPU есть)
-- `libcublas.so.12` отсутствует в wheel ctranslate2 на обеих платформах
-- **cuDNN не нужен** — в `libctranslate2.so` ноль символов cudnn (проверено `nm -D` и `strings`)
-- На Windows ctranslate2 делает `os.add_dll_directory` в своём `__init__.py`,
-  но только для DLL внутри пакета; `cublas64_12.dll` тоже не бандлится
+Прежнее утверждение о недоступности Windows wheel `nvidia-cublas-cu12` было
+ошибочным: такой wheel есть и для закреплённой версии 12.9.1.4. Следовательно,
+системный CUDA Toolkit не должен быть обязательным способом подключения Windows.
 
 ## Решение
 
-### nvidia-cublas-cu12 как pip-зависимость
+CUDA подключается через extra `cuda` на Linux/WSL x86_64 и Windows x64.
+Драйвер NVIDIA остаётся внешним требованием; Windows также требует Visual C++
+Runtime x64. Установка extra не включает CUDA: пользователь выбирает её через
+CLI или TOML. `auto` всегда выбирает ONNX CPU, ASR и VAD получают явный
+`CPUExecutionProvider`. Команды установки и обновления — в
+[README](../../README.md#подключение-cuda).
 
-В `pyproject.toml`:
-```
-"nvidia-cublas-cu12>=12.4; sys_platform == 'linux' and platform_machine == 'x86_64'"
-```
+CTranslate2 4.8.1 и cuBLAS 12.9.1.4 закреплены в `pyproject.toml`, чтобы
+установка через `uv tool` и из клона использовала проверенное сочетание.
+В cuBLAS 12.9.2.10 появилась дополнительная зависимость NVRTC. Обновление
+версий требует повторной проверки библиотек и bootstrap; одного обновления
+lock-файла недостаточно.
 
-Нижняя граница `>=12.4` — ctranslate2 собран с CUDA 12.4. Пакет доступен только
-для Linux x86_64 (на Windows и macOS не устанавливается по platform marker).
+### Linux: preload по полному пути
 
-### ctypes.CDLL preload вместо LD_LIBRARY_PATH
+`_cuda_bootstrap.py` загружает `libcublas.so.12` через `ctypes.CDLL` с
+`RTLD_GLOBAL`. Линкер затем разрешает запрос CTranslate2 по soname.
+Изменение `LD_LIBRARY_PATH` внутри процесса не решает задачу: glibc кеширует
+пути поиска. Путь optional-пакета определяется через `nvidia.cublas.__path__`,
+что поддерживает namespace package без `__file__`.
 
-`_cuda_bootstrap.py` загружает `libcublas.so.12` по полному пути через
-`ctypes.CDLL(path, mode=RTLD_GLOBAL)` **до** первого `import ctranslate2`.
+### Windows: регистрация каталога и preload DLL
 
-Почему не `os.environ["LD_LIBRARY_PATH"]`: на Linux/glibc динамический линкер (`ld.so`)
-кеширует пути поиска при старте процесса и **не перечитывает** `LD_LIBRARY_PATH`
-из environ в рамках уже запущенного процесса.
+Bootstrap регистрирует `nvidia/cublas/bin` через `os.add_dll_directory`, затем
+загружает по абсолютным путям сначала `cublasLt64_12.dll`, затем
+`cublas64_12.dll`. Handles библиотек и регистрации каталога хранятся до
+завершения процесса. Повторный вызов не загружает их заново. Это обеспечивает
+доступность уже загруженных DLL для динамического загрузчика CTranslate2 и
+не требует изменения системного PATH.
 
-Почему `RTLD_GLOBAL`: без этого флага символы cublas не видны другим `.so`,
-загруженным позже (в т.ч. `libctranslate2.so`).
+Bootstrap вызывается только при создании CUDA-модели, до локального импорта
+`WhisperModel`. Если CTranslate2 ранее импортирован для декодирования аудио,
+preload всё равно выполняется до создания CUDA-модели. CPU-путь bootstrap не
+вызывает. Отсутствие optional-пакета безопасно: системная cuBLAS всё ещё может
+обслужить явно выбранную CUDA. Ошибка загрузки найденной Windows DLL сохраняется.
 
-Динамический линкер кеширует загруженные библиотеки по soname — когда ctranslate2
-потом вызовет `dlopen("libcublas.so.12")`, линкер вернёт уже загруженный handle.
+### Ошибки и явный выбор
 
-### strict_device для явного --device
+Явный `device` из CLI или TOML передаёт `strict_device=True` при загрузке и
+транскрипции. CUDA не заменяется молча на CPU. Подсказки различают отсутствие
+библиотек, проблемы драйвера, несовместимость GPU/runtime и нехватку памяти;
+отказ по неподдерживаемому типу вычислений учитывает устройство, чтобы
+одинаковая ошибка CTranslate2 на CPU не получала CUDA-подсказку. Исходное
+сообщение сохраняется. Неизвестная ошибка не получает произвольный
+совет установить Toolkit. Это одинаково для одного файла и батча.
 
-`--device cuda` / `--device cpu` → `strict_device=True` → CUDA-ошибка = raise, без fallback.
-`--device auto` → `strict_device=False` → текущее поведение с fallback на CPU.
+Прежний механизм fallback оркестратора при `strict_device=False` сохранён
+для существующих программных callers. Автоматический CLI-путь теперь ONNX,
+поэтому он не попадает в CUDA fallback.
 
-Мотивация: silent fallback для часового файла = 60 минут вместо 5.
+## Проверка зависимостей Windows
 
-## Последствия и tradeoffs
+Статическая проверка 2026-09-21: скачаны wheels из PyPI, проверены SHA-256,
+для DLL/PYD прочитаны PE imports через `objdump -p` и строки динамической
+загрузки. Модели распознавания не скачивались.
 
-**~400 MB на CPU-only Linux x86_64**: nvidia-cublas-cu12 ставится на все Linux x86_64,
-включая машины без GPU. Bootstrap при этом preload'ит libcublas (overhead ~1 ms),
-но она не используется, т.к. ctranslate2 не получит запрос на CUDA device.
+- `ctranslate2-4.8.1-cp313-cp313-win_amd64.whl`, SHA-256
+  `d52499f05a60a791aeadee28d609efa130142f376d1ea76b2b1c593bb01f8827`.
+  `ctranslate2.dll` содержит имена `cublas64_12.dll` и `nvcuda.dll`;
+  ссылок на cuDNN и динамическую cudart в этой DLL не обнаружено.
+  В wheel есть `cudnn64_9.dll`, но её наличие не означает использование
+  cuDNN проверенной рабочей DLL. OpenMP DLL поставляется внутри wheel;
+  импорты MSVCP/VCRUNTIME требуют Visual C++ Runtime.
+- `nvidia_cublas_cu12-12.9.1.4-py3-none-win_amd64.whl`, SHA-256
+  `1e5fee10662e6e52bd71dec533fbbd4971bb70a5f24f3bc3793e5c2e9dc640bf`.
+  DLL находятся в `nvidia/cublas/bin`. cuBLAS импортирует cuBLAS Lt и
+  KERNEL32; cuBLAS Lt импортирует KERNEL32. В строках cuBLAS Lt также найдена
+  динамическая ссылка на `nvrtc64_120_0.dll`, которой нет в PE imports.
+  Обязательность NVRTC для Whisper этим статическим анализом не установлена;
+  первый реальный Windows-прогон должен проверить и этот путь загрузки.
+  `nvblas64_12.dll` не требуется проверенному пути CTranslate2.
 
-Альтернатива — `[project.optional-dependencies]` + `uv sync --extra cuda`,
-но тогда теряется zero-config UX. Для v1 оставляем как обязательную зависимость.
+Основания: [CTranslate2 4.8.1 на PyPI](https://pypi.org/project/ctranslate2/4.8.1/#files),
+[cuBLAS 12.9.1.4 на PyPI](https://pypi.org/project/nvidia-cublas-cu12/12.9.1.4/#files),
+[загрузчик CTranslate2](https://github.com/OpenNMT/CTranslate2/blob/v4.8.1/python/ctranslate2/__init__.py),
+[метаданные cuBLAS 12.9.2.10](https://pypi.org/pypi/nvidia-cublas-cu12/12.9.2.10/json).
 
-**Windows GPU**: nvidia-cublas-cu12 недоступен как pip-пакет для Windows.
-Единственный путь — системный CUDA toolkit (`choco install cuda` / `winget install -e --id Nvidia.CUDA`).
-CLI выводит эту подсказку при CUDA-ошибке на `sys.platform == "win32"`.
+Это обоснование состава extra для конкретных wheels, а не подтверждение
+транскрипции на Windows GPU. Реальный прогон Windows x64 с драйвером и extra,
+без Toolkit и ручной правки PATH, **не выполнен**. Linux-тесты с подменой
+Windows API не заменяют такую проверку.
 
-**Namespace package**: `nvidia.cublas` — namespace package (`__file__` is `None`),
-для определения директории используется `__path__[0]`, а не `__file__`.
+## Проверка поставки и поведения
 
-## Отклонённые альтернативы
+На Linux выполнены `uv run pytest`: 524 passed, 2 skipped. Пропуски —
+Windows-only кодировка OEM и интеграционный bootstrap без optional-пакета.
+До удаления cuBLAS интеграционный тест Linux bootstrap проходил.
+Обычный `uv sync --locked` удаляет прежнюю обязательную cuBLAS;
+`uv sync --extra cuda --locked --dry-run` возвращает её в план установки.
 
-| Альтернатива | Почему отклонена |
-|---|---|
-| `nvidia-cudnn-cu12` в зависимостях | ctranslate2 не использует cuDNN — ноль символов, проверено через `nm -D` |
-| Self-reexec с `LD_LIBRARY_PATH` | ctypes.CDLL решает задачу без перезапуска процесса; self-reexec создаёт проблемы с сигналами, tty, fd |
-| `os.environ["LD_LIBRARY_PATH"] += ...` | glibc кеширует пути при старте, не перечитывает environ |
-| `DeviceResolution` dataclass + `resolve_device()` | Один `bool strict_device` решает ту же задачу проще |
-| ctranslate2 preflight (`get_supported_compute_types`) | Латентность; try/catch при загрузке модели не хуже |
-| Bootstrap console_scripts entrypoint | Не нужен — достаточно вызова в начале `transcriber.py` |
+Метаданные собранного wheel проверены для 12 сочетаний платформы, архитектуры
+и extra. Полное разрешение зависимостей wheel через `uv pip compile` для Linux
+и Windows, с extra и без, подтверждает отсутствие NVIDIA-пакетов в обычной
+установке и наличие только cuBLAS 12.9.1.4 при выборе extra.
+
+Формы `uv tool install` для клона, клона с extra и именованной Git-зависимости
+с extra проверены в отдельном временном каталоге tools. Для проверки самой
+команды зависимости были исключены; их разрешение проверено отдельно выше.
+Git-транспорт проверялся через локальный репозиторий и ветку реализации,
+а не через ещё не опубликованную ветку на сервере. Версия uv — 0.12.17.
+
+## Последствия и альтернативы
+
+- Обычная установка не требует NVIDIA-пакетов. FasterWhisper CPU сохраняется.
+- Дополнительные библиотеки скачиваются только по выбору пользователя.
+- Единый extra заменяет требование установить полный Toolkit на Windows;
+  существующая системная установка библиотек остаётся допустимой.
+- Отклонено сохранение обязательной cuBLAS ради готовности CUDA сразу после
+  установки: это увеличивает CPU-установку и не решает несовместимость GPU.
+- Отклонено автоматическое включение CUDA по драйверу или extra: установка
+  библиотек не должна менять движок и модель по умолчанию.
+- Перезапуск процесса с `LD_LIBRARY_PATH` не нужен; явная загрузка библиотек
+  решает проблему без изменения обработки сигналов и файловых дескрипторов.
+- CUDA extra на Windows ARM64, Linux ARM и macOS в эту задачу не входит.

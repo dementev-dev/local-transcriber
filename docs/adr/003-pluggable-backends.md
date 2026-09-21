@@ -2,7 +2,7 @@
 
 **Статус**: Принято
 **Дата**: 2026-03-21
-**Обновлено**: 2026-08-12
+**Обновлено**: 2026-09-21
 
 ## Контекст
 
@@ -32,8 +32,9 @@ Protocol вместо ABC — бэкенды не наследуются, дос
 ### Ленивые импорты
 
 Бэкенды импортируются только при выборе — `get_backend(device)` делает import внутри.
-Импорт faster-whisper запускает CUDA bootstrap (~1ms), импорт openvino-genai загружает ~50MB
-shared libraries. Ни то, ни другое не должно происходить, если бэкенд не выбран.
+CUDA bootstrap вызывается только при создании CUDA-модели (см. ADR-001).
+Импорт openvino-genai загружает ~50MB shared libraries и не должен происходить,
+если бэкенд не выбран.
 
 ### Device как селектор бэкенда
 
@@ -41,7 +42,7 @@ shared libraries. Ни то, ни другое не должно происхо�
 - `cuda`, `cpu` → FasterWhisperBackend
 - `openvino` → OpenVINOBackend
 - `onnx` → OnnxAsrBackend
-- `auto` → CUDA при наличии `nvidia-smi`, иначе ONNX на CPU
+- `auto` → ONNX на CPU независимо от `nvidia-smi` и установки extra
 
 ### load_model() — единственный владелец pipeline
 
@@ -54,7 +55,7 @@ CLI не вызывает ensure_model_available отдельно — это у�
 Fallback живёт в `transcriber.py` (оркестратор), не в бэкендах:
 - CUDA ошибка → CPU (FasterWhisper)
 - OpenVINO ошибка → CPU (FasterWhisper)
-- `strict_device=True` (явный `--device`) → ошибка без fallback
+- `strict_device=True` (явный device из CLI или TOML) → ошибка без fallback
 
 При fallback в батч-режиме обновляются model, backend, model_path и actual_device
 через TranscribeFileResult — следующий файл использует правильный бэкенд.
@@ -76,8 +77,8 @@ OpenVINO модели предквантизированы (int8/fp16), compute_
 ### Зависимости бэкендов по умолчанию
 
 faster-whisper, onnx-asr/onnxruntime и openvino-genai ставятся вместе. Модели
-скачиваются только для активного бэкенда. CUDA (`nvidia-cublas-cu12`) остаётся
-conditional для Linux x86_64. OpenVINO — conditional для x86_64/AMD64, кроме
+скачиваются только для активного бэкенда. cuBLAS подключается через extra `cuda`
+для Linux/WSL x86_64 и Windows x64 (см. ADR-001). OpenVINO — conditional для x86_64/AMD64, кроме
 macOS; ONNX обеспечивает автоматический CPU-путь на остальных платформах.
 
 ## Последствия
