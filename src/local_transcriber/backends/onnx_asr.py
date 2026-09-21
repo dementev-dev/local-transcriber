@@ -141,6 +141,7 @@ class OnnxAsrBackend:
         self._vad: Any = None
         self._providers: list[str] = []
         self._quantization: str | None = None
+        self._cpu_threads = 0
 
     @property
     def word_timestamps_available(self) -> bool:
@@ -194,6 +195,8 @@ class OnnxAsrBackend:
 
         compute_type маппится в onnx-asr ``quantization`` — это суффикс файла
         модели; для unquantized (float32/fp32) нужно None, не строку.
+        cpu_threads > 0 задаёт intra_op_num_threads сессиям ASR и VAD;
+        0 оставляет настройки потоков onnxruntime.
         """
         import onnx_asr
 
@@ -201,15 +204,19 @@ class OnnxAsrBackend:
         quantization = _normalize_quantization(actual_compute_type)
 
         providers = ["CPUExecutionProvider"]
+        session_kwargs: dict[str, Any] = {"providers": providers}
+        if cpu_threads > 0:
+            session_kwargs["sess_options"] = _session_options(cpu_threads)
         model = onnx_asr.load_model(
             model=model_path,
             quantization=quantization,
-            providers=providers,
+            **session_kwargs,
         )
-        vad = onnx_asr.load_vad("silero", providers=providers)
+        vad = onnx_asr.load_vad("silero", **session_kwargs)
         self._vad = vad
         self._providers = providers
         self._quantization = quantization
+        self._cpu_threads = cpu_threads
         return model.with_vad(vad).with_timestamps()
 
     def runtime_info(self) -> dict[str, str]:
@@ -229,6 +236,7 @@ class OnnxAsrBackend:
             "asr_providers": configured,
             "vad_providers": configured,
             "quantization": self._quantization or "float32",
+            "intra_op_threads": str(self._cpu_threads) if self._cpu_threads else "по умолчанию",
         }
 
     def transcribe(
@@ -337,6 +345,15 @@ class OnnxAsrBackend:
             UserWarning,
             stacklevel=2,
         )
+
+
+def _session_options(cpu_threads: int) -> Any:
+    """SessionOptions с бюджетом потоков; общий объект для ASR и VAD."""
+    import onnxruntime
+
+    options = onnxruntime.SessionOptions()
+    options.intra_op_num_threads = cpu_threads
+    return options
 
 
 def _format_compute_types(quantizations: frozenset[str | None]) -> str:
