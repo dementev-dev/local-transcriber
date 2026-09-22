@@ -108,6 +108,36 @@ class TestCreateModel:
         )
         load_vad.assert_called_once_with("silero", providers=["CPUExecutionProvider"])
 
+    def test_thread_budget_reaches_asr_and_vad_sessions(self, monkeypatch):
+        """--threads задаёт intra_op_num_threads обеим сессиям через SessionOptions."""
+        load_asr = MagicMock()
+        load_vad = MagicMock()
+        monkeypatch.setattr("onnx_asr.load_model", load_asr)
+        monkeypatch.setattr("onnx_asr.load_vad", load_vad)
+
+        backend = OnnxAsrBackend()
+        backend.create_model("gigaam-v3-e2e-rnnt", "onnx", "int8", cpu_threads=4)
+
+        asr_options = load_asr.call_args.kwargs["sess_options"]
+        vad_options = load_vad.call_args.kwargs["sess_options"]
+        assert asr_options.intra_op_num_threads == 4
+        assert vad_options.intra_op_num_threads == 4
+        assert backend.runtime_info()["intra_op_threads"] == "4"
+
+    def test_zero_thread_budget_keeps_library_session_defaults(self, monkeypatch):
+        """0 не передаёт SessionOptions: потоки остаются на усмотрение onnxruntime."""
+        load_asr = MagicMock()
+        load_vad = MagicMock()
+        monkeypatch.setattr("onnx_asr.load_model", load_asr)
+        monkeypatch.setattr("onnx_asr.load_vad", load_vad)
+
+        backend = OnnxAsrBackend()
+        backend.create_model("gigaam-v3-e2e-rnnt", "onnx", "int8", cpu_threads=0)
+
+        assert "sess_options" not in load_asr.call_args.kwargs
+        assert "sess_options" not in load_vad.call_args.kwargs
+        assert backend.runtime_info()["intra_op_threads"] == "по умолчанию"
+
     def test_wraps_vad_model_with_timestamps(self, monkeypatch):
         timestamped_model = object()
 
@@ -659,3 +689,26 @@ class TestModelAliases:
         assert "--device cpu --model medium" in message
         assert "--device cuda --model large-v3-turbo" not in message
         assert "--device cpu --model large-v3-turbo" not in message
+
+
+class TestRuntimeInfo:
+    def test_reports_versions_and_configured_providers(self, monkeypatch):
+        """Диагностика различает доступные providers и те, что заданы сессиям ASR и VAD."""
+        monkeypatch.setattr(
+            "onnxruntime.get_available_providers",
+            lambda: ["CoreMLExecutionProvider", "CPUExecutionProvider"],
+        )
+        monkeypatch.setattr("onnx_asr.load_model", lambda **kwargs: MagicMock())
+        monkeypatch.setattr("onnx_asr.load_vad", lambda model, **kwargs: MagicMock())
+        backend = OnnxAsrBackend()
+        backend.actual_compute_type = "int8"
+        backend.create_model("gigaam-v3-e2e-rnnt", "onnx", "int8")
+
+        info = backend.runtime_info()
+
+        assert info["onnxruntime"]
+        assert info["onnx_asr"]
+        assert info["available_providers"] == "CoreMLExecutionProvider, CPUExecutionProvider"
+        assert info["asr_providers"] == "CPUExecutionProvider"
+        assert info["vad_providers"] == "CPUExecutionProvider"
+        assert info["quantization"] == "int8"

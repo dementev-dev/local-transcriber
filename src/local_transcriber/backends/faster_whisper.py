@@ -16,6 +16,7 @@ from local_transcriber.types import (
     Word,
     WordTimestampsUnavailableError,
 )
+from local_transcriber.utils import package_version
 
 MODEL_REPOS = {
     "tiny": "Systran/faster-whisper-tiny",
@@ -43,10 +44,12 @@ MODEL_REQUIRED_FILES = [
 class FasterWhisperBackend:
     """Бэкенд транскрипции через faster-whisper (CTranslate2)."""
 
+    engine = "faster-whisper"
     word_timestamps_available = True
 
     def __init__(self):
         self.actual_compute_type: str | None = None
+        self._cpu_threads = 0
 
     def ensure_model_available(
         self,
@@ -94,6 +97,7 @@ class FasterWhisperBackend:
 
         from faster_whisper import WhisperModel
 
+        self._cpu_threads = cpu_threads
         try:
             return WhisperModel(
                 model_path,
@@ -156,6 +160,22 @@ class FasterWhisperBackend:
             device_used="",  # оркестратор проставит actual_device
             words=words,
         )
+
+    def runtime_info(self) -> dict[str, str]:
+        """Версии CTranslate2/faster-whisper и число видимых CUDA-устройств."""
+        import ctranslate2
+
+        try:
+            cuda_devices = str(ctranslate2.get_cuda_device_count())
+        except Exception as exc:  # noqa: BLE001 — диагностика не должна ронять запуск
+            cuda_devices = f"недоступно ({exc})"
+        return {
+            "faster_whisper": package_version("faster-whisper"),
+            "ctranslate2": package_version("ctranslate2"),
+            "cuda_devices": cuda_devices,
+            "compute_type": self.actual_compute_type or "",
+            "cpu_threads": str(self._cpu_threads) if self._cpu_threads else "по умолчанию",
+        }
 
 
 def _notify(on_status: Callable[[str], None] | None, message: str) -> None:

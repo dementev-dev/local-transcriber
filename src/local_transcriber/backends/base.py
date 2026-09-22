@@ -16,6 +16,9 @@ class Backend(Protocol):
     наследование не требуется.
     """
 
+    engine: str
+    """Имя движка для сведений о выполнении."""
+
     @property
     def word_timestamps_available(self) -> bool:
         """Гарантирует ли выбранный backend/model пословные таймкоды."""
@@ -52,4 +55,8 @@ class Backend(Protocol):
         on_status: Callable[[str], None] | None = None,
     ) -> TranscribeResult:
         """Транскрибирует файл, возвращает результат."""
+        ...
+
+    def runtime_info(self) -> dict[str, str]:
+        """Версии runtime и фактическая конфигурация для удалённой диагностики."""
         ...

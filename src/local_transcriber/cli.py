@@ -13,8 +13,6 @@ from rich.status import Status
 
 from .config import (
     CliValues,
-    ResolvedConfig,
-    apply_device_defaults,
     load_config,
     resolve_defaults,
 )
@@ -39,11 +37,12 @@ from .quality import (
 )
 from .speaker_diarizer import SpeakerDiarizer, load_speaker_diarizer
 from .transcriber import (
+    ExecutionInfo,
+    ExecutionRequest,
     Segment,
+    Transcriber,
     TranscribeResult,
-    _transcribe_file,
     cuda_error_hint,
-    load_model,
 )
 from .types import (
     UNKNOWN_LANGUAGE,
@@ -53,10 +52,7 @@ from .types import (
 )
 from .utils import (
     build_output_path,
-    detect_device,
     expand_globs,
-    get_gpu_name,
-    get_intel_gpu_name,
     has_existing_transcript,
     validate_input_file,
 )
@@ -93,21 +89,6 @@ def _with_cli_warning_renderer(
             command(*args, **kwargs)
 
     return wrapped
-
-
-def _format_device_info(device_used: str) -> str:
-    """Формирует строку устройства для шапки транскрипта."""
-    if device_used == "cuda":
-        gpu_name = get_gpu_name()
-        return f"CUDA ({gpu_name or 'Unknown GPU'})"
-    if device_used == "openvino-gpu":
-        gpu_name = get_intel_gpu_name()
-        return f"OpenVINO ({gpu_name or 'Intel GPU'})"
-    if device_used in ("openvino", "openvino-cpu"):
-        return "OpenVINO (CPU)"
-    if device_used == "onnx":
-        return "ONNX (CPU)"
-    return "CPU"
 
 
 def _format_language_mode(requested_language: str, result: TranscribeResult) -> str:
@@ -348,7 +329,7 @@ def main(
         )
         raise SystemExit(2)
 
-    resolved_device: str | None = None
+    requested_device: str | None = None
     try:
         config = load_config()
         cli_values: CliValues = {
@@ -360,11 +341,17 @@ def main(
         }
         defaults = resolve_defaults(cli_values, config)
         diarize_enabled = defaults["diarize"] is True or speakers is not None
+        requested_device = defaults["device"]
 
-        resolved_device = detect_device(defaults["device"])
-        defaults = apply_device_defaults(defaults, resolved_device, cli_values, config)
-
-        ct_explicit = compute_type is not None or "compute_type" in config
+        # Умолчания model/compute_type зависят от устройства — их разрешает module.
+        request = ExecutionRequest(
+            device=requested_device,
+            model=defaults["model"],
+            compute_type=defaults["compute_type"],
+            language=defaults["language"],
+            cpu_threads=threads,
+            require_word_timestamps=diarize_enabled,
+        )
 
         expanded = expand_globs(files)
         if not expanded:
@@ -381,22 +368,18 @@ def main(
         if is_batch:
             _run_batch(
                 expanded,
-                defaults,
+                request,
                 verbose,
                 force,
-                ct_explicit,
-                cpu_threads=threads,
                 diarize=diarize_enabled,
                 speakers=speakers,
             )
         else:
             _run_single(
                 expanded[0],
-                defaults,
+                request,
                 output,
                 verbose,
-                ct_explicit,
-                cpu_threads=threads,
                 diarize=diarize_enabled,
                 speakers=speakers,
             )
@@ -406,15 +389,15 @@ def main(
     except SystemExit:
         raise
     except ValueError as exc:
-        _print_cuda_hint(exc, resolved_device)
+        _print_cuda_hint(exc, requested_device)
         console.print(f"Ошибка: {exc}", style="red bold")
         raise SystemExit(1)
     except (FileNotFoundError,) as exc:
-        _print_cuda_hint(exc, resolved_device)
+        _print_cuda_hint(exc, requested_device)
         console.print(f"Ошибка: {exc}", style="red bold")
         raise SystemExit(1)
     except Exception as exc:
-        _print_cuda_hint(exc, resolved_device)
+        _print_cuda_hint(exc, requested_device)
         if verbose:
             console.print_exception()
         else:
@@ -423,13 +406,50 @@ def main(
         raise SystemExit(1)
 
 
+def _print_execution_header(info: ExecutionInfo, verbose: bool) -> None:
+    """Печатает выбранное исполнение; в --verbose — версии runtime для диагностики."""
+    console.print(
+        f"Модель: [bold]{info.model}[/bold]  "
+        f"Устройство: [bold]{info.device}[/bold]  "
+        f"Compute: [bold]{info.compute_type}[/bold]"
+    )
+    if info.device == "openvino-gpu" and info.model != "large-v3":
+        console.print(
+            "Совет: --model large-v3 даёт лучшее качество на GPU (~2x дольше)",
+            style="dim",
+        )
+    if info.device != info.resolved_device:
+        console.print(
+            f"Запрошено {info.requested_device}, используется {info.device}",
+            style="yellow",
+        )
+    if verbose:
+        threads = info.cpu_threads or "по умолчанию библиотеки"
+        console.print(
+            f"Движок: {info.engine}  Потоки (запрошено): {threads}", style="dim"
+        )
+        for key, value in info.runtime.items():
+            console.print(f"  {key}: {value}", style="dim", markup=False)
+
+
+def _load_diarizer(
+    diarize: bool, speakers: int | None, cpu_threads: int
+) -> SpeakerDiarizer | None:
+    """Готовит диаризатор до первого ASR; пословный контракт уже проверен module."""
+    if not diarize:
+        return None
+    return load_speaker_diarizer(
+        speakers=speakers,
+        threads=cpu_threads,
+        on_status=lambda message: console.print(message),
+    )
+
+
 def _run_single(
     file: Path,
-    defaults: ResolvedConfig,
+    request: ExecutionRequest,
     output: Path | None,
     verbose: bool,
-    compute_type_explicit: bool = False,
-    cpu_threads: int = 0,
     diarize: bool = False,
     speakers: int | None = None,
 ) -> None:
@@ -437,9 +457,6 @@ def _run_single(
     start = time.monotonic()
 
     validated_file = validate_input_file(file)
-    requested_device = defaults["device"]
-    resolved_device = detect_device(requested_device)
-    strict = requested_device != "auto"
     output_path = build_output_path(validated_file, output)
 
     console.print(f"Файл: [bold]{validated_file.name}[/bold]")
@@ -447,59 +464,18 @@ def _run_single(
     def on_segment(seg: Segment) -> None:
         console.print(f"  [{seg.start:.2f}s] {seg.text.strip()}")
 
-    model_obj, actual_device, backend, model_path = load_model(
-        defaults["model"],
-        resolved_device,
-        defaults["compute_type"],
-        on_status=lambda msg: console.print(msg),
-        strict_device=strict,
-        compute_type_explicit=compute_type_explicit,
-        cpu_threads=cpu_threads,
-    )
-    actual_ct = (
-        getattr(backend, "actual_compute_type", defaults["compute_type"])
-        or defaults["compute_type"]
-    )
-    console.print(
-        f"Модель: [bold]{defaults['model']}[/bold]  "
-        f"Устройство: [bold]{actual_device}[/bold]  "
-        f"Compute: [bold]{actual_ct}[/bold]"
-    )
-    if actual_device == "openvino-gpu" and defaults["model"] != "large-v3":
-        console.print(
-            "Совет: --model large-v3 даёт лучшее качество на GPU (~2x дольше)",
-            style="dim",
-        )
-
-    speaker_diarizer = None
-    if diarize:
-        if not backend.word_timestamps_available:
-            raise ValueError(
-                "Выбранный движок или модель не поддерживает пословные таймкоды"
-            )
-        speaker_diarizer = load_speaker_diarizer(
-            speakers=speakers,
-            threads=cpu_threads,
-            on_status=lambda message: console.print(message),
-        )
+    transcriber = Transcriber(request)
+    info = transcriber.prepare(on_status=lambda msg: console.print(msg))
+    _print_execution_header(info, verbose)
+    speaker_diarizer = _load_diarizer(diarize, speakers, request.cpu_threads)
 
     with Status("Подготавливаю запуск...", console=console) as status:
-        tfr = _transcribe_file(
-            model=model_obj,
-            actual_device=actual_device,
-            backend=backend,
-            model_path=model_path,
-            file_path=validated_file,
-            model_name=defaults["model"],
-            compute_type=defaults["compute_type"],
-            language=defaults["language"] if defaults["language"] != "auto" else None,
+        result = transcriber.transcribe(
+            validated_file,
             on_segment=on_segment if verbose else None,
             on_status=status.update,
-            strict_device=strict,
-            cpu_threads=cpu_threads,
         )
 
-    result = tfr.result
     speaker_transcript = None
     diarization_warning = None
     diarization_degraded = False
@@ -526,33 +502,19 @@ def _run_single(
         if diarization_warning is not None:
             console.print(f"Внимание: {diarization_warning}", style="yellow")
 
-    if tfr.actual_device != resolved_device:
-        if requested_device == "auto":
-            console.print(
-                f"Определено устройство {resolved_device}, "
-                f"но использовано {tfr.actual_device} (fallback)",
-                style="yellow",
-            )
-        else:
-            console.print(
-                f"Запрошено {requested_device}, использовано {tfr.actual_device}",
-                style="yellow",
-            )
-
     if len(result.segments) == 0:
         message = f"Речь не обнаружена в файле {validated_file.name}"
         if speaker_diarizer is not None:
             message += "; диаризация не запускалась"
         console.print(message, style="yellow")
 
-    device_info = _format_device_info(result.device_used)
-    language_mode = _format_language_mode(defaults["language"], result)
+    language_mode = _format_language_mode(request.language or "auto", result)
 
     content = format_transcript(
         result=result,
         source_filename=validated_file.name,
-        model_name=defaults["model"],
-        device_info=device_info,
+        model_name=info.model,
+        device_info=info.description,
         language_mode=language_mode,
         speaker_transcript=speaker_transcript,
         diarization_warning=diarization_warning,
@@ -569,11 +531,9 @@ def _run_single(
 
 def _run_batch(
     files: list[Path],
-    defaults: ResolvedConfig,
+    request: ExecutionRequest,
     verbose: bool,
     force: bool,
-    compute_type_explicit: bool = False,
-    cpu_threads: int = 0,
     diarize: bool = False,
     speakers: int | None = None,
 ) -> None:
@@ -603,50 +563,11 @@ def _run_batch(
             raise SystemExit(1)
         return
 
-    # Phase 2: Load model (ensure + create в одном вызове)
-    requested_device = defaults["device"]
-    resolved_device = detect_device(requested_device)
-    strict = requested_device != "auto"
-    model_obj, actual_device, backend, model_path = load_model(
-        defaults["model"],
-        resolved_device,
-        defaults["compute_type"],
-        on_status=lambda msg: console.print(msg),
-        strict_device=strict,
-        compute_type_explicit=compute_type_explicit,
-        cpu_threads=cpu_threads,
-    )
-
-    if actual_device == "openvino-gpu" and defaults["model"] != "large-v3":
-        console.print(
-            "Совет: --model large-v3 даёт лучшее качество на GPU (~2x дольше)",
-            style="dim",
-        )
-
-    if actual_device != resolved_device:
-        if requested_device == "auto":
-            console.print(
-                f"Определено устройство {resolved_device}, "
-                f"но используется {actual_device} (fallback)",
-                style="yellow",
-            )
-        else:
-            console.print(
-                f"Запрошено {requested_device}, используется {actual_device}",
-                style="yellow",
-            )
-
-    speaker_diarizer = None
-    if diarize:
-        if not backend.word_timestamps_available:
-            raise ValueError(
-                "Выбранный движок или модель не поддерживает пословные таймкоды"
-            )
-        speaker_diarizer = load_speaker_diarizer(
-            speakers=speakers,
-            threads=cpu_threads,
-            on_status=lambda message: console.print(message),
-        )
+    # Phase 2: module выполнения создаётся, когда есть работа
+    transcriber = Transcriber(request)
+    info = transcriber.prepare(on_status=lambda msg: console.print(msg))
+    _print_execution_header(info, verbose)
+    speaker_diarizer = _load_diarizer(diarize, speakers, request.cpu_threads)
 
     # Phase 3: Transcribe
     processed = 0
@@ -664,38 +585,15 @@ def _run_batch(
                 console.print(f"  [{seg.start:.2f}s] {seg.text.strip()}")
 
             with Status(f"{prefix}...", console=console) as status:
-                tfr = _transcribe_file(
-                    model=model_obj,
-                    actual_device=actual_device,
-                    backend=backend,
-                    model_path=model_path,
-                    file_path=file,
-                    model_name=defaults["model"],
-                    compute_type=defaults["compute_type"],
-                    language=defaults["language"]
-                    if defaults["language"] != "auto"
-                    else None,
+                result = transcriber.transcribe(
+                    file,
                     on_segment=on_segment if verbose else None,
                     on_status=status.update
                     if not verbose
                     else lambda msg: console.print(msg),
-                    strict_device=strict,
-                    cpu_threads=cpu_threads,
                 )
 
-            if tfr.actual_device != actual_device:
-                console.print(
-                    f"  {file.name}: fallback на {tfr.actual_device} при транскрипции",
-                    style="yellow",
-                )
-            # Обновляем после возможного mid-stream fallback
-            model_obj = tfr.model
-            actual_device = tfr.actual_device
-            backend = tfr.backend
-            model_path = tfr.model_path
-
-            result = tfr.result
-            language_mode = _format_language_mode(defaults["language"], result)
+            language_mode = _format_language_mode(request.language or "auto", result)
             speaker_transcript = None
             diarization_warning = None
             file_degraded = False
@@ -735,13 +633,11 @@ def _run_batch(
                     message += "; диаризация не запускалась"
                 console.print(message, style="yellow")
 
-            device_info = _format_device_info(result.device_used)
-
             content = format_transcript(
                 result=result,
                 source_filename=file.name,
-                model_name=defaults["model"],
-                device_info=device_info,
+                model_name=info.model,
+                device_info=info.description,
                 language_mode=language_mode,
                 speaker_transcript=speaker_transcript,
                 diarization_warning=diarization_warning,
@@ -760,7 +656,7 @@ def _run_batch(
         except KeyboardInterrupt:
             raise
         except Exception as exc:
-            _print_cuda_hint(exc, actual_device)
+            _print_cuda_hint(exc, request.device)
             if verbose:
                 console.print_exception()
             else:

@@ -463,3 +463,21 @@ def test_validate_model_dir_requires_alignment_heads_for_word_timestamps(tmp_pat
 
     with pytest.raises(ValueError, match="alignment_heads"):
         _validate_model_dir(tmp_path)
+
+
+def test_runtime_info_reports_available_and_actual_devices(monkeypatch):
+    """Диагностика показывает устройства OpenVINO и то, что выбрано фактически."""
+    core = MagicMock()
+    core.available_devices = ["CPU", "GPU"]
+    monkeypatch.setattr("openvino.Core", lambda: core)
+    backend = OpenVINOBackend(ov_device="openvino-gpu", compute_type_explicit=True)
+    backend.actual_ov_device = "GPU"
+    backend.actual_compute_type = "fp16"
+
+    info = backend.runtime_info()
+
+    assert info["openvino"]
+    assert info["available_devices"] == "CPU, GPU"
+    assert info["device"] == "GPU"
+    assert info["compute_type"] == "fp16"
+    assert "--threads не применяется" in info["threads"]

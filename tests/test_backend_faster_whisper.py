@@ -83,3 +83,18 @@ def test_transcribe_rejects_one_nonempty_segment_without_word_timestamps(tmp_pat
 
     with pytest.raises(RuntimeError, match="пословные таймкоды"):
         FasterWhisperBackend().transcribe(model, tmp_path / "audio.wav", "ru")
+
+
+def test_runtime_info_reports_versions_and_cuda_devices(monkeypatch):
+    """Диагностика называет версии runtime и число CUDA-устройств, не обещая ускорения."""
+    monkeypatch.setattr("ctranslate2.get_cuda_device_count", lambda: 0)
+    backend = FasterWhisperBackend()
+    backend.actual_compute_type = "float32"
+
+    info = backend.runtime_info()
+
+    assert info["ctranslate2"]
+    assert info["faster_whisper"]
+    assert info["cuda_devices"] == "0"
+    assert info["compute_type"] == "float32"
+    assert info["cpu_threads"] == "по умолчанию"

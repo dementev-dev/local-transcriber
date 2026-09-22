@@ -30,12 +30,16 @@ class CliValues(TypedDict, total=False):
 
 
 class ResolvedConfig(TypedDict):
-    """Полная конфигурация после разрешения каскада."""
+    """Конфигурация после каскада CLI > TOML.
 
-    model: str
+    ``model`` и ``compute_type`` остаются ``None``, если не заданы явно:
+    их умолчания зависят от устройства и разрешаются при загрузке модели.
+    """
+
+    model: str | None
     language: str
     device: str
-    compute_type: str
+    compute_type: str | None
     diarize: bool
 
 
@@ -47,6 +51,8 @@ HARDCODED_DEFAULTS: ResolvedConfig = {
     "diarize": False,
 }
 
+# Умолчания по устройству; HARDCODED_DEFAULTS — последний резерв для
+# устройств вне таблицы.
 DEVICE_DEFAULTS: dict[str, dict[str, str]] = {
     "cuda": {"model": "medium", "compute_type": "float16"},
     "cpu": {"model": "medium", "compute_type": "float32"},
@@ -136,11 +142,12 @@ def load_config(path: Path | None = None) -> ConfigValues:
 
 
 def resolve_defaults(cli_values: CliValues, config: ConfigValues) -> ResolvedConfig:
-    """Каскад приоритетов: CLI > конфиг-файл > hardcoded-дефолты."""
+    """Каскад приоритетов: CLI > конфиг-файл > hardcoded-дефолты.
+
+    Device-aware ключи (model, compute_type) без явного значения остаются None.
+    """
     return {
-        "model": _resolve_value(
-            cli_values.get("model"), config.get("model"), HARDCODED_DEFAULTS["model"]
-        ),
+        "model": _resolve_value(cli_values.get("model"), config.get("model"), None),
         "language": _resolve_value(
             cli_values.get("language"),
             config.get("language"),
@@ -152,9 +159,7 @@ def resolve_defaults(cli_values: CliValues, config: ConfigValues) -> ResolvedCon
             HARDCODED_DEFAULTS["device"],
         ),
         "compute_type": _resolve_value(
-            cli_values.get("compute_type"),
-            config.get("compute_type"),
-            HARDCODED_DEFAULTS["compute_type"],
+            cli_values.get("compute_type"), config.get("compute_type"), None
         ),
         "diarize": _resolve_value(
             cli_values.get("diarize"),
@@ -171,23 +176,3 @@ def _resolve_value(cli_value: _T | None, config_value: _T | None, default: _T) -
     if config_value is not None:
         return config_value
     return default
-
-
-def apply_device_defaults(
-    defaults: ResolvedConfig,
-    resolved_device: str,
-    cli_values: CliValues,
-    config: ConfigValues,
-) -> ResolvedConfig:
-    """Применяет device-aware дефолты для model и compute_type,
-    если они не были явно заданы через CLI или конфиг."""
-    device_defs = DEVICE_DEFAULTS.get(resolved_device, {})
-    if not device_defs:
-        return defaults
-
-    result = dict(defaults)
-    for key in ("model", "compute_type"):
-        if cli_values.get(key) is None and key not in config:
-            if key in device_defs:
-                result[key] = device_defs[key]
-    return cast(ResolvedConfig, result)

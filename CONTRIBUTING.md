@@ -43,25 +43,25 @@ tests/
 CLI (cli.py)
   → config.py: загрузка .transcriber.toml, каскад дефолтов
   → utils.py: валидация файлов, определение устройства
-  → transcriber.py: загрузка модели (с CUDA fallback), транскрипция
+  → transcriber.py: Transcriber — разрешение устройства, загрузка модели один раз на запуск, транскрипция, fallback
   → formatter.py: сегменты → markdown с таймкодами
   → запись результата
 ```
 
 ## Ключевые архитектурные решения
 
-- **CUDA fallback** — двухуровневый: при загрузке модели и при транскрипции (mid-stream). GPU может быть видна через nvidia-smi, но не иметь достаточно VRAM.
-- **Device-aware дефолты** — `compute_type` зависит от устройства (`float16`/`float32`). `float16` не работает на CPU, `float32` расточителен на GPU.
+- **Module выполнения** (`Transcriber` в `transcriber.py`) — один владелец модели, adapter'а и фактического исполнения на запуск. Fallback GPU→CPU (при загрузке и mid-stream) живёт внутри и доступен только при `strict_device=False` из Python API: явный device в CLI strict, `auto` — ONNX CPU.
+- **Device-aware дефолты** — `model` и `compute_type` без явного значения разрешаются по устройству при загрузке (`float16`/`float32`). `float16` не работает на CPU, `float32` расточителен на GPU.
 - **cuBLAS bootstrap** (`_cuda_bootstrap.py`) — preload через ctypes до импорта ctranslate2. pip-пакет `nvidia-cublas-cu12` ставит `.so` в нестандартное место, а `LD_LIBRARY_PATH` нельзя изменить в рантайме.
-- **Батч-режим** — 3 фазы (prescan → load model → transcribe). Модель загружается один раз (~2-5 сек), невалидные файлы отсеиваются до загрузки.
+- **Батч-режим** — 3 фазы (prescan → создание `Transcriber` → transcribe). Модель загружается один раз (~2-5 сек), невалидные файлы отсеиваются до загрузки; CLI не переносит состояние между файлами.
 - **Ручной glob в utils** — typer на Windows не раскрывает `*.mp4`, поэтому глобы обрабатываются явно.
 
 ## Тестирование
 
-- Все CLI-тесты через `typer.testing.CliRunner` + моки (faster-whisper не вызывается)
-- Моки: `load_config`, `validate_input_file`, `detect_device`, `ensure_model_available`, `load_model`, `_transcribe_file`, `write_transcript`
-- Паттерн: `_single_patches()` — хелпер для стандартного happy-path набора моков
-- `_make_result()` / `_make_tfr()` — фабрики тестовых данных
+- Все CLI-тесты через `typer.testing.CliRunner` с настоящим `Transcriber` и fake adapter, подменённым в `local_transcriber.transcriber.get_backend` (библиотеки не вызываются)
+- Моки: `load_config`, `validate_input_file`, `write_transcript`
+- Паттерн: `_cli_run()` — контекстный менеджер стандартного набора, отдаёт `(backend, write_transcript)`
+- `_make_result()` / `_make_backend()` — фабрики тестовых данных
 
 ## Частые задачи
 
