@@ -31,7 +31,7 @@ powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | ie
 **2. Установить transcriber.** Напрямую из git, без скачивания исходников:
 
 ```bash
-uv tool install --python 3.13 git+https://git.dementev.space/ddmitry/local-transcriber.git
+uv tool install --python 3.13 git+https://github.com/dementev-dev/local-transcriber
 ```
 
 Или из клона репозитория (`<URL>` — адрес репозитория, из которого вы ставите):
@@ -79,7 +79,7 @@ transcribe meeting.mp4
 **Обновление:**
 
 ```bash
-uv tool install --python 3.13 --force git+https://git.dementev.space/ddmitry/local-transcriber.git
+uv tool install --python 3.13 --force git+https://github.com/dementev-dev/local-transcriber
 ```
 
 Или в папке со склонированным репозиторием:
@@ -141,7 +141,7 @@ CUDA Toolkit и ручная правка системного PATH для эт�
 Для установки из Git или подключения CUDA к уже установленной программе:
 
 ```bash
-uv tool install --python 3.13 --force "local-transcriber[cuda] @ git+https://git.dementev.space/ddmitry/local-transcriber.git"
+uv tool install --python 3.13 --force "local-transcriber[cuda] @ git+https://github.com/dementev-dev/local-transcriber"
 ```
 
 Из клона репозитория:
