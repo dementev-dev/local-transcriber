@@ -5,7 +5,6 @@
 - Основной remote: `origin`
 - Gitea: `https://git.dementev.space`
 - CLI: `tea`
-- Remote `github` является зеркалом и не используется для управления задачами
 - Внешние pull request не входят в очередь triage
 
 ## Доступ

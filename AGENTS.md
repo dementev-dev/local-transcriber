@@ -82,7 +82,7 @@ All tests mock backends — no real model downloads or transcription. Key test p
 
 ### Issue tracker
 
-Задачи ведутся в Gitea через `tea`; GitHub используется только как зеркало, внешние PR не входят в triage. См. `docs/agents/issue-tracker.md`.
+Задачи ведутся в Gitea через `tea`; внешние PR не входят в triage. См. `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
